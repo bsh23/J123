@@ -22,7 +22,7 @@ const CONFIG_FILE = path.join(__dirname, 'server-config.json');
 
 // --- STATE MANAGEMENT ---
 let productInventory = [];
-let chatSessions = {}; // In-memory storage for chats (synced to file)
+let chatSessions = {}; 
 
 // Fallback credentials
 let serverConfig = {
@@ -33,7 +33,7 @@ let serverConfig = {
   appSecret: process.env.FB_APP_SECRET || ''
 };
 
-// --- LOGGING MIDDLEWARE ---
+// --- LOGGING ---
 app.use((req, res, next) => {
   if (!req.url.includes('/render-image') && !req.url.includes('/api/chats')) {
       console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
@@ -41,14 +41,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// --- PERSISTENCE FUNCTIONS ---
+// --- PERSISTENCE ---
 async function loadInventory() {
   try {
     const data = await readFile(DATA_FILE, 'utf8');
     productInventory = JSON.parse(data);
     console.log(`📦 INVENTORY: Loaded ${productInventory.length} items.`);
   } catch (err) {
-    console.log('📦 INVENTORY: Starting empty.');
     productInventory = [];
   }
 }
@@ -59,50 +58,31 @@ async function loadChats() {
     chatSessions = JSON.parse(data);
     console.log(`💬 CHATS: Loaded history for ${Object.keys(chatSessions).length} contacts.`);
   } catch (err) {
-    console.log('💬 CHATS: Starting empty.');
     chatSessions = {};
   }
 }
 
 async function saveChats() {
-  try {
-    await writeFile(CHATS_FILE, JSON.stringify(chatSessions, null, 2));
-  } catch (err) {
-    console.error('❌ CHAT STORAGE ERROR:', err.message);
-  }
+  try { await writeFile(CHATS_FILE, JSON.stringify(chatSessions, null, 2)); } catch (err) { console.error('❌ CHAT SAVE ERROR:', err.message); }
 }
 
 async function saveInventory() {
-  try {
-    await writeFile(DATA_FILE, JSON.stringify(productInventory, null, 2));
-  } catch (err) {
-    console.error('❌ STORAGE ERROR:', err.message);
-  }
+  try { await writeFile(DATA_FILE, JSON.stringify(productInventory, null, 2)); } catch (err) { console.error('❌ INVENTORY SAVE ERROR:', err.message); }
 }
 
 async function loadServerConfig() {
   try {
     const data = await readFile(CONFIG_FILE, 'utf8');
     const savedConfig = JSON.parse(data);
-    serverConfig = { 
-      ...serverConfig, 
-      ...savedConfig,
-      accessToken: savedConfig.accessToken || serverConfig.accessToken,
-      phoneNumberId: savedConfig.phoneNumberId || serverConfig.phoneNumberId
-    };
-    console.log(`⚙️  CONFIG: Loaded API Credentials.`);
+    serverConfig = { ...serverConfig, ...savedConfig };
+    console.log(`⚙️  CONFIG: Loaded.`);
   } catch (err) {
-    console.log('⚙️  CONFIG: No config file found. Using defaults.');
+    console.log('⚙️  CONFIG: Using defaults.');
   }
 }
 
 async function saveServerConfig() {
-  try {
-    await writeFile(CONFIG_FILE, JSON.stringify(serverConfig, null, 2));
-    console.log('💾 CONFIG: Credentials saved to disk.');
-  } catch (err) {
-    console.error('❌ CONFIG ERROR:', err.message);
-  }
+  try { await writeFile(CONFIG_FILE, JSON.stringify(serverConfig, null, 2)); } catch (err) { console.error('❌ CONFIG SAVE ERROR:', err.message); }
 }
 
 // --- GEMINI SETUP ---
@@ -115,143 +95,93 @@ const displayProductTool = {
   description: 'Trigger the sending of product photos. Use this whenever discussing a specific item in stock.',
   parameters: {
     type: Type.OBJECT,
-    properties: {
-      productId: { type: Type.STRING, description: 'ID of the product' }
-    },
+    properties: { productId: { type: Type.STRING, description: 'ID of the product' } },
     required: ['productId']
   }
 };
 
 const escalateToAdminTool = {
   name: 'escalateToAdmin',
-  description: 'SILENTLY lock conversation and notify admin. Call this for: Buying Intent (Payment), Technical Questions (Service/Profit/Specs), Out of Stock items, or Delivery Price.',
+  description: 'SILENTLY lock conversation. Use for: Buying Intent, Payment, Tech Specs, Out of Stock, Delivery Costs.',
   parameters: {
     type: Type.OBJECT,
-    properties: {
-      reason: { type: Type.STRING, description: 'Reason for escalation' }
-    },
+    properties: { reason: { type: Type.STRING, description: 'Reason for escalation' } },
     required: ['reason']
   }
 };
 
 const getSystemInstruction = (products) => {
   const productCatalogStr = products.length > 0 
-    ? products.map(p => `ID: ${p.id}, Name: ${p.name}, Price: KSh ${p.priceRange.min} - ${p.priceRange.max}, Desc: ${p.description}, Specs: ${JSON.stringify(p.specs)}`).join('\n')
-    : "NO SPECIFIC ITEMS CURRENTLY IN STOCK. Inform customer we fabricate custom Vending Machines (Milk, Salad, Water) upon request.";
+    ? products.map(p => `ID: ${p.id}, Name: ${p.name}, Price: ${p.priceRange.min}-${p.priceRange.max}, Desc: ${p.description}`).join('\n')
+    : "NO ITEMS IN STOCK. We fabricate custom Vending Machines upon request.";
 
-  return `You are "John", the expert sales agent for "JohnTech Vendors Ltd" in Kenya.
-
-  BUSINESS LOCATION:
-  Thika Road, Kihunguro, behind Shell Petrol Station. (Be precise).
-
-  YOUR GOAL:
-  Assist the client with product info. However, for serious sales or complex issues, you must HAND OVER to the human admin immediately.
-
-  PERSONALITY:
-  - Mirror the user's tone. If they speak Sheng/Casual, be casual. If Formal, be formal.
-  - Be helpful but concise.
+  return `You are "John", sales agent for "JohnTech Vendors Ltd" (Thika Road, Kihunguro).
+  GOAL: Assist with product info. Hand over to admin for sales/complex issues.
   
-  CRITICAL RULE - WHEN TO CALL 'escalateToAdmin' (SILENT LOCK):
-  You must call the 'escalateToAdmin' tool and STOP talking if the user asks about:
-  1. **Payment:** "How do I pay?", "M-Pesa number?", "Installments?".
-  2. **Technical Details:** "How does the pump work?", "Profitability calculation?", "Service/Maintenance?", "Power consumption?", "Specs/features?".
-  3. **Delivery Price:** "How much to transport to Kisumu?", "Delivery cost?".
-  4. **Out of Stock/Custom:** Asking for a machine not in the INVENTORY LIST below.
-  5. **Serious Buying Intent:** "I want to buy now", "Can I come collect?", "Where exactly are you located?".
+  CRITICAL - CALL 'escalateToAdmin' AND STOP TALKING IF:
+  1. Payment/M-Pesa/Installments asked.
+  2. Technical/Maintenance/Profitability questions.
+  3. Delivery costs/Locations asked.
+  4. "I want to buy now" or "Can I collect?".
   
-  *When you call 'escalateToAdmin', do NOT generate any text response. The system will handle it.*
-
-  OPERATIONAL RULES:
-  1. **NO Special Characters:** Do NOT use asterisks (**bold**) or hashes (##).
-  2. **Images First:** If showcasing a product, trigger the image tool first.
+  RULES:
+  - No bold (**), no headers (##).
+  - Show images (displayProduct) before describing.
   
-  INVENTORY LIST:
+  INVENTORY:
   ${productCatalogStr}`;
 };
 
-// --- HELPER: FORMAT TEXT ---
 function formatResponseText(text) {
     if (!text) return "";
     return text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/##/g, '').replace(/__/g, '');
 }
 
 // --- ROUTES ---
-
-// 0. Health Check
 app.get('/health', (req, res) => res.status(200).send('OK'));
-
-// 1. Static Files
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// 2. Inventory API
 app.get('/api/products', (req, res) => res.json(productInventory || []));
-
 app.post('/api/products', async (req, res) => {
   const { products } = req.body;
   if (Array.isArray(products)) {
     productInventory = products;
     await saveInventory();
-    res.json({ status: 'success', count: productInventory.length });
-  } else {
-    res.status(400).json({ status: 'error' });
-  }
+    res.json({ status: 'success' });
+  } else { res.status(400).json({ status: 'error' }); }
 });
 
-// 3. Chat API (For Dashboard)
 app.get('/api/chats', (req, res) => {
     const chatsArray = Object.values(chatSessions).sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
     res.json(chatsArray);
 });
 
-// 3b. Toggle Bot Status (Admin Takeover/Release)
 app.post('/api/chat/:id/toggle-bot', async (req, res) => {
     const { id } = req.params;
-    const { active } = req.body; // true = resume bot, false = stop bot
-
+    const { active } = req.body; 
     if (chatSessions[id]) {
         chatSessions[id].botActive = active;
-        // If resuming, clear escalation flag so it looks normal
-        if (active) {
-            chatSessions[id].isEscalated = false;
-        }
+        if (active) chatSessions[id].isEscalated = false;
         await saveChats();
         res.json({ success: true, botActive: active });
-    } else {
-        res.status(404).json({ error: "Chat not found" });
-    }
+    } else { res.status(404).json({ error: "Chat not found" }); }
 });
 
-// 3c. Send Message API (For Admin Dashboard Reply)
 app.post('/api/send-message', async (req, res) => {
     const { to, text } = req.body;
-    
-    if (!to || !text) {
-        return res.status(400).json({ error: 'Missing "to" (phone) or "text" field' });
-    }
-
     try {
-        await sendWhatsApp(to, { type: 'text', text: { body: text } }, true); // Pass true for 'isAdmin'
+        await sendWhatsApp(to, { type: 'text', text: { body: text } }, true);
         res.json({ success: true });
     } catch (err) {
         console.error("Admin Reply Error:", err);
-        res.status(500).json({ error: 'Failed to send message' });
+        res.status(500).json({ error: 'Failed' });
     }
 });
 
-// 4. Settings API
 app.post('/api/settings', async (req, res) => {
-  const { accessToken, phoneNumberId, businessAccountId, appId, appSecret, verifyToken } = req.body;
-  serverConfig = {
-    ...serverConfig,
-    accessToken: accessToken || serverConfig.accessToken,
-    phoneNumberId: phoneNumberId || serverConfig.phoneNumberId,
-    businessAccountId: businessAccountId || serverConfig.businessAccountId,
-    appId: appId || serverConfig.appId,
-    appSecret: appSecret || serverConfig.appSecret,
-    verifyToken: verifyToken || serverConfig.verifyToken
-  };
+  serverConfig = { ...serverConfig, ...req.body };
   await saveServerConfig();
-  res.json({ success: true, message: 'Settings saved to server.' });
+  res.json({ success: true });
 });
 
 app.get('/api/settings', (req, res) => {
@@ -263,27 +193,20 @@ app.get('/api/settings', (req, res) => {
   });
 });
 
-// 5. Verify Meta Config
 app.post('/api/verify-meta-config', async (req, res) => {
   const { accessToken, phoneNumberId } = req.body;
-  if (!accessToken || !phoneNumberId) {
-    return res.status(400).json({ success: false, message: 'Missing Credentials.' });
-  }
   try {
-    const response = await axios.get(`https://graph.facebook.com/v17.0/${phoneNumberId}`, {
+    await axios.get(`https://graph.facebook.com/v17.0/${phoneNumberId}`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
-    return res.json({ success: true, message: 'Connection Successful!', data: response.data });
-  } catch (error) {
-    return res.status(400).json({ success: false, message: 'Verification failed.' });
-  }
+    return res.json({ success: true });
+  } catch (error) { return res.status(400).json({ success: false }); }
 });
 
-// 6. Image Render
 app.get('/api/render-image/:productId/:index', (req, res) => {
   const { productId, index } = req.params;
   const product = productInventory.find(p => p.id === productId);
-  if (product && product.images && product.images[index]) {
+  if (product?.images?.[index]) {
     const matches = product.images[index].match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
     if (matches && matches.length === 3) {
       const buffer = Buffer.from(matches[2], 'base64');
@@ -295,7 +218,7 @@ app.get('/api/render-image/:productId/:index', (req, res) => {
   res.status(404).send('Not found');
 });
 
-// --- WHATSAPP HELPERS ---
+// --- HELPERS ---
 const getAuthHeaders = () => ({ Authorization: `Bearer ${serverConfig.accessToken}` });
 
 async function markMessageAsRead(messageId) {
@@ -306,9 +229,7 @@ async function markMessageAsRead(messageId) {
             { messaging_product: 'whatsapp', status: 'read', message_id: messageId },
             { headers: getAuthHeaders() }
         );
-    } catch (err) {
-        console.error("Blue Tick Error:", err.message);
-    }
+    } catch (err) { console.error("Read Mark Error:", err.message); }
 }
 
 async function downloadMetaImage(mediaId) {
@@ -321,21 +242,16 @@ async function downloadMetaImage(mediaId) {
       mimeType: mediaRes.headers['content-type']
     };
   } catch (err) {
-    console.error("DL Error:", err.message);
+    console.error("Image DL Error:", err.message);
     return null;
   }
 }
 
 async function sendWhatsApp(to, payload, isAdmin = false) {
-  if (!serverConfig.accessToken || !serverConfig.phoneNumberId) {
-      console.error("❌ SEND FAILED: Missing Access Token or Phone ID. Check Settings.");
-      return;
-  }
+  if (!serverConfig.accessToken) return;
   try {
-    // Save Outgoing Message to Storage
     const sessionId = to;
     if (!chatSessions[sessionId]) {
-        // Should exist, but safety check
         chatSessions[sessionId] = {
             id: sessionId,
             contactName: `Client ${sessionId}`,
@@ -343,36 +259,24 @@ async function sendWhatsApp(to, payload, isAdmin = false) {
             lastMessage: '',
             lastMessageTime: new Date(),
             unreadCount: 0,
-            isEscalated: false,
             botActive: true
         };
     }
-
     let storageMsg = {
         id: Date.now().toString(),
-        sender: 'bot', // We use 'bot' for UI, but AI sees it as 'model'
+        sender: 'bot',
         timestamp: new Date(),
-        type: payload.type
+        type: payload.type,
+        text: payload.type === 'text' ? payload.text.body : 'Sent Image'
     };
-
-    if (payload.type === 'text') storageMsg.text = payload.text.body;
-    if (payload.type === 'image') {
-        storageMsg.text = 'Sent an image';
-        storageMsg.image = payload.image.link; 
-    }
+    if (payload.type === 'image') storageMsg.image = payload.image.link; 
 
     chatSessions[sessionId].messages.push(storageMsg);
-    chatSessions[sessionId].lastMessage = storageMsg.text || 'Media';
+    chatSessions[sessionId].lastMessage = storageMsg.text;
     chatSessions[sessionId].lastMessageTime = new Date();
-    
-    // If Admin sent it, reset unread count
-    if (isAdmin) {
-        chatSessions[sessionId].unreadCount = 0;
-    }
-    
-    saveChats(); // Persist to file
+    if (isAdmin) chatSessions[sessionId].unreadCount = 0;
+    saveChats();
 
-    // Send to Meta
     await axios.post(
       `https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`, 
       { messaging_product: 'whatsapp', recipient_type: 'individual', to, ...payload }, 
@@ -380,44 +284,32 @@ async function sendWhatsApp(to, payload, isAdmin = false) {
     );
   } catch (err) {
     console.error("Send Error:", err.response?.data || err.message);
-    throw err; // Propagate for API responses
+    throw err;
   }
 }
 
-// 7. Webhook Verification
+// --- WEBHOOK ---
 app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-  const currentVerifyToken = serverConfig.verifyToken || 'johntech_verify_token';
-
-  if (mode === 'subscribe' && token === currentVerifyToken) {
-    console.log('✅ WEBHOOK VERIFIED');
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
-  }
+  if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === serverConfig.verifyToken) {
+    res.status(200).send(req.query['hub.challenge']);
+  } else { res.sendStatus(403); }
 });
 
-// 8. Webhook Handler
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200); 
-
-  let senderPhone = null;
 
   try {
     const body = req.body;
     if (!body.object || !body.entry?.[0]?.changes?.[0]?.value?.messages) return;
 
     const messageObj = body.entry[0].changes[0].value.messages[0];
-    senderPhone = messageObj.from;
+    const senderPhone = messageObj.from;
     const messageType = messageObj.type;
     const apiKey = getApiKey();
 
-    // --- BLUE TICKS: Mark as Read IMMEDIATELY ---
     await markMessageAsRead(messageObj.id);
 
-    // --- SAVE INCOMING MESSAGE ---
+    // Initialize Chat
     if (!chatSessions[senderPhone]) {
         chatSessions[senderPhone] = {
             id: senderPhone,
@@ -426,15 +318,10 @@ app.post('/webhook', async (req, res) => {
             lastMessage: '',
             lastMessageTime: new Date(),
             unreadCount: 0,
-            isEscalated: false,
-            botActive: true // Default: Bot is active
+            botActive: true
         };
     } else {
-        // Update contact name if available
-        const newName = messageObj.contacts?.[0]?.profile?.name;
-        if (newName) chatSessions[senderPhone].contactName = newName;
-        // Ensure botActive is defined (for legacy chats)
-        if (chatSessions[senderPhone].botActive === undefined) chatSessions[senderPhone].botActive = true;
+        if (messageObj.contacts?.[0]?.profile?.name) chatSessions[senderPhone].contactName = messageObj.contacts[0].profile.name;
     }
 
     let incomingMsg = {
@@ -445,68 +332,63 @@ app.post('/webhook', async (req, res) => {
         text: ''
     };
 
-    // --- PROCESS MESSAGE ---
     let geminiParts = [];
 
     if (messageType === 'text') {
-      console.log(`📩 Text from ${senderPhone}: ${messageObj.text.body}`);
+      console.log(`📩 TEXT from ${senderPhone}: ${messageObj.text.body}`);
       geminiParts.push({ text: messageObj.text.body });
       incomingMsg.text = messageObj.text.body;
     } else if (messageType === 'image') {
-      console.log(`📷 Image from ${senderPhone}`);
+      console.log(`📷 IMAGE from ${senderPhone}`);
       const media = await downloadMetaImage(messageObj.image.id);
       incomingMsg.type = 'image';
       incomingMsg.text = messageObj.image.caption || 'Photo';
       if (media) {
          incomingMsg.image = `data:${media.mimeType};base64,${media.base64}`;
          geminiParts.push({ inlineData: { mimeType: media.mimeType, data: media.base64 } });
-         // Ensure we always have text so Gemini doesn't error out
          geminiParts.push({ text: messageObj.image.caption || "Analyze this image." });
       }
-    } else {
-      return; 
-    }
+    } else { return; }
 
-    // Update Session
     chatSessions[senderPhone].messages.push(incomingMsg);
     chatSessions[senderPhone].lastMessage = incomingMsg.text;
     chatSessions[senderPhone].lastMessageTime = new Date();
     chatSessions[senderPhone].unreadCount += 1;
     await saveChats();
 
-    // --- CHECK IF BOT IS LOCKED ---
+    // Lock Check
     if (chatSessions[senderPhone].botActive === false) {
-        console.log(`🔒 Bot is LOCKED for ${senderPhone}. Skipping AI response.`);
-        return; // Stop here, Admin handles it.
+        console.log(`🔒 Bot LOCKED for ${senderPhone}. Skipping.`);
+        return; 
     }
 
     if (!apiKey) {
-      console.log("⚠️ API KEY MISSING in .env file. Bot cannot respond.");
-      await sendWhatsApp(senderPhone, { type: 'text', text: { body: "⚠️ System Alert: AI Config Missing. Please check server logs." } });
+      console.log("⚠️ API KEY MISSING. Cannot reply.");
+      await sendWhatsApp(senderPhone, { type: 'text', text: { body: "⚠️ System Alert: AI Config Missing." } });
       return;
     }
     
-    // SAFETY: If we have no parts (e.g. failed image download), don't call Gemini
     if (geminiParts.length === 0) return;
 
-    console.log(`🤖 Generating AI Response for ${senderPhone}...`);
+    console.log(`🤖 Asking Gemini (${MODEL_NAME})...`);
 
-    // --- AI GENERATION ---
     const ai = new GoogleGenAI({ apiKey });
     
-    // BUILD HISTORY: Include ALL previous messages so bot "remembers" context
-    // and sees what Admin wrote if Admin was active.
+    // SAFETY: Don't send old images in history, they cause errors.
+    // Replace old images with text placeholders.
     const historyParts = chatSessions[senderPhone].messages
-        .slice(0, -1) // Exclude current message (which is in incomingMsg)
-        .slice(-15)   // Limit context window to last 15 messages for efficiency
-        .filter(m => m.text || m.type === 'image') // Filter out empty garbage
+        .slice(0, -1) 
+        .slice(-10) // Small context window
+        .filter(m => m.text || m.type === 'image')
         .map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
-            // Safety: Ensure text part is never empty string or Gemini throws 400
-            parts: [{ text: (m.text && m.text.trim() !== '') ? m.text : '[Media Message]' }]
+            parts: [{ 
+                text: (m.type === 'image') 
+                    ? `[User sent an image labeled: ${m.text || 'Photo'}]` 
+                    : (m.text || '') 
+            }]
         }));
 
-    // Start Chat with History
     const chat = ai.chats.create({
       model: MODEL_NAME,
       config: {
@@ -518,11 +400,7 @@ app.post('/webhook', async (req, res) => {
       history: historyParts
     });
 
-    // Send Current Message
-    // FIX: sendMessage expects { message: ... } structure in SDK, not raw content object
-    const result = await chat.sendMessage({ 
-       message: { parts: geminiParts }
-    });
+    const result = await chat.sendMessage({ message: { parts: geminiParts } });
 
     const content = result.response.candidates?.[0]?.content;
     let textResponse = content?.parts?.find(p => p.text)?.text;
@@ -534,31 +412,25 @@ app.post('/webhook', async (req, res) => {
     if (functionCalls) {
       for (const part of functionCalls) {
         const fc = part.functionCall;
-        
         if (fc.name === 'displayProduct') {
            const product = productInventory.find(p => p.id === fc.args.productId);
            if (product?.images?.length) imagesToSend = product.images.slice(0, 5);
         }
-        
         if (fc.name === 'escalateToAdmin') {
            shouldSilentLock = true;
-           console.log(`🚨 ESCALATION TRIGGERED: ${fc.args.reason}`);
+           console.log(`🚨 ESCALATION: ${fc.args.reason}`);
         }
       }
     }
 
     if (shouldSilentLock) {
-        // 1. Lock the bot
         chatSessions[senderPhone].botActive = false;
-        // 2. Flag for Admin (Red Badge)
         chatSessions[senderPhone].isEscalated = true;
         await saveChats();
-        // 3. DO NOT SEND TEXT RESPONSE (Silent Lock)
-        console.log(`🔒 Bot Locked Silently (Escalation).`);
+        console.log(`🔒 Bot Locked Silently.`);
         return; 
     }
 
-    // Send Images First 
     if (imagesToSend.length > 0) {
        for (let i = 0; i < imagesToSend.length; i++) {
          const link = `${DOMAIN}/api/render-image/${productInventory.find(p=>p.images.includes(imagesToSend[0])).id}/${i}`;
@@ -567,35 +439,27 @@ app.post('/webhook', async (req, res) => {
        }
     }
 
-    // Send Text Response 
     if (textResponse) {
       textResponse = formatResponseText(textResponse);
-      console.log(`🤖 Bot Reply: ${textResponse.substring(0, 50)}...`);
+      console.log(`🤖 Reply: ${textResponse.substring(0, 40)}...`);
       await sendWhatsApp(senderPhone, { type: 'text', text: { body: textResponse } });
     }
 
   } catch (err) {
-    console.error('❌ Webhook AI/Logic Error:', err);
+    console.error('❌ ERROR:', err.message);
   }
 });
 
-// Catch-all must be last
+// Catch-all
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'dist', 'index.html')));
 
 Promise.all([loadInventory(), loadChats(), loadServerConfig()]).then(() => {
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log("________________________________________________________________");
     console.log(`✅ SERVER STARTED ON PORT: ${PORT}`);
-    
-    if (!process.env.API_KEY) {
-        console.error("❌ CRITICAL ERROR: API_KEY is missing from environment variables.");
-        console.error("   The Bot will NOT respond to messages.");
-        console.error("   Please ensure .env file exists and contains API_KEY.");
-    } else {
-        console.log("✅ API_KEY loaded successfully.");
-        console.log("✅ Bot is ready to reply.");
-    }
-    console.log(`   Webhook: ${DOMAIN}/webhook`);
+    const key = process.env.API_KEY || "";
+    console.log(`🔑 API Key Status: ${key ? "LOADED (" + key.substring(0,4) + "...)" : "MISSING ❌"}`);
+    console.log(`📝 Logs will appear below for every message.`);
     console.log("________________________________________________________________\n");
   });
 });
