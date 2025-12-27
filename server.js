@@ -4,13 +4,13 @@ import path from 'path';
 import axios from 'axios';
 import { GoogleGenAI, Type } from '@google/genai';
 import { fileURLToPath } from 'url';
-import fs from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(express.json({ limit: '50mb' })); // Increased limit for images
+app.use(express.json({ limit: '50mb' }));
 
 // --- CONFIGURATION ---
 const PORT = 5041; 
@@ -21,7 +21,7 @@ const CONFIG_FILE = path.join(__dirname, 'server-config.json');
 // --- STATE MANAGEMENT ---
 let productInventory = [];
 
-// Fallback credentials (UPDATED WITH PROVIDED KEYS)
+// Fallback credentials
 let serverConfig = {
   accessToken: process.env.FB_ACCESS_TOKEN || 'EAAZAphZBPWU7wBQT7Y3mmkG7lbOhb2MgO0CZBZBfDFJhoSlcDD3QaRZAOW3OZAwyVOpuBmyEJzZBO6Id33MMMtsBZBq3jm78GeLi71H2ZCw26d6INUtZCSrfqFgZAwZAESTsDpHB51lwEGmvTsn20qBjtQPQKuX0ApygP12SHZAm1Qszfd8DNBndmnUWZAV3aKs2qTQjEDEAZDZD',
   phoneNumberId: process.env.FB_PHONE_NUMBER_ID || '849028871635662',
@@ -30,10 +30,16 @@ let serverConfig = {
   appSecret: process.env.FB_APP_SECRET || '5444a89d5cbf3ce81e8aa985268390b5'
 };
 
+// --- LOGGING MIDDLEWARE ---
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
+
 // --- PERSISTENCE FUNCTIONS ---
 async function loadInventory() {
   try {
-    const data = await fs.readFile(DATA_FILE, 'utf8');
+    const data = await readFile(DATA_FILE, 'utf8');
     productInventory = JSON.parse(data);
     console.log(`📦 INVENTORY: Loaded ${productInventory.length} items.`);
   } catch (err) {
@@ -44,7 +50,7 @@ async function loadInventory() {
 
 async function saveInventory() {
   try {
-    await fs.writeFile(DATA_FILE, JSON.stringify(productInventory, null, 2));
+    await writeFile(DATA_FILE, JSON.stringify(productInventory, null, 2));
   } catch (err) {
     console.error('❌ STORAGE ERROR:', err.message);
   }
@@ -52,7 +58,7 @@ async function saveInventory() {
 
 async function loadServerConfig() {
   try {
-    const data = await fs.readFile(CONFIG_FILE, 'utf8');
+    const data = await readFile(CONFIG_FILE, 'utf8');
     const savedConfig = JSON.parse(data);
     serverConfig = { 
       ...serverConfig, 
@@ -60,15 +66,15 @@ async function loadServerConfig() {
       accessToken: savedConfig.accessToken || serverConfig.accessToken,
       phoneNumberId: savedConfig.phoneNumberId || serverConfig.phoneNumberId
     };
-    console.log(`⚙️  CONFIG: Loaded API Credentials from 'server-config.json'.`);
+    console.log(`⚙️  CONFIG: Loaded API Credentials.`);
   } catch (err) {
-    console.log('⚙️  CONFIG: No config file found. Using Environment/Fallback Variables.');
+    console.log('⚙️  CONFIG: No config file found. Using defaults.');
   }
 }
 
 async function saveServerConfig() {
   try {
-    await fs.writeFile(CONFIG_FILE, JSON.stringify(serverConfig, null, 2));
+    await writeFile(CONFIG_FILE, JSON.stringify(serverConfig, null, 2));
     console.log('💾 CONFIG: Credentials saved to disk.');
   } catch (err) {
     console.error('❌ CONFIG ERROR:', err.message);
@@ -76,9 +82,10 @@ async function saveServerConfig() {
 }
 
 // --- GEMINI SETUP ---
-// Using provided Gemini Key as default
-const getApiKey = () => process.env.API_KEY || 'AIzaSyCJCadcY_3IYriBRbm1Th2ZMk7W_-sc2Fk'; 
-const MODEL_NAME = 'gemini-3-pro-preview';
+// Key removed due to leak. Must be provided via Environment Variable.
+const getApiKey = () => process.env.API_KEY; 
+// CHANGED: Using Flash model to avoid Quota Exceeded (429) errors
+const MODEL_NAME = 'gemini-3-flash-preview';
 
 // --- TOOLS ---
 const displayProductTool = {
@@ -121,21 +128,22 @@ const getSystemInstruction = (products) => {
 
   KEY BUSINESS DETAILS (Use these in conversation):
   - Location: Thika Road, Kihunguro, Behind Shell Petrol Station.
-  - Delivery: We deliver countrywide (Kenya) using courier services or personal delivery for large orders.
+  - Delivery: We deliver countrywide (Kenya).
   - Warranty: All machines come with a 1-Year Warranty.
-  - Customization: We can fabricate ANY size (e.g., 50L, 100L, 200L) if the customer wants a specific capacity.
 
   SALES STRATEGY:
-  - **Be Persuasive but Natural:** If they ask about Milk ATMs, mention it's a "highly profitable business" because people buy milk daily.
-  - **Visuals:** ALWAYS use the 'displayProduct' tool when describing a specific machine so the customer sees what they are buying.
-  - **Pricing:** Give the price range confidently. If they say it's expensive, mention the quality of materials (Food Grade Stainless Steel) and the warranty.
-  - **Call to Action:** If they seem interested, encourage them to visit the workshop at Kihunguro or place an order.
-
+  - **Be Persuasive but Natural:** Mention it's a "highly profitable business".
+  - **Visuals:** ALWAYS use 'displayProduct' tool when describing a machine.
+  - **Pricing:** Give the price range confidently.
+  
   INVENTORY LIST:
   ${productCatalogStr}`;
 };
 
 // --- ROUTES ---
+
+// 0. Health Check (Important for 502 debugging)
+app.get('/health', (req, res) => res.status(200).send('OK'));
 
 // 1. Static Files
 app.use(express.static(path.join(__dirname, 'dist')));
@@ -261,17 +269,21 @@ app.get('/webhook', (req, res) => {
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200); 
 
+  // We define these outside the try block so they are available in catch
+  let senderPhone = null;
+
   try {
     const body = req.body;
     if (!body.object || !body.entry?.[0]?.changes?.[0]?.value?.messages) return;
 
     const messageObj = body.entry[0].changes[0].value.messages[0];
-    const senderPhone = messageObj.from;
+    senderPhone = messageObj.from;
     const messageType = messageObj.type;
     const apiKey = getApiKey();
 
     if (!apiKey) {
       console.error("❌ MISSING GEMINI API KEY");
+      await sendWhatsApp(senderPhone, { type: 'text', text: { body: "⚠️ System Alert: AI Config Missing. Please contact admin." } });
       return;
     }
 
@@ -334,22 +346,30 @@ app.post('/webhook', async (req, res) => {
 
   } catch (err) {
     console.error('Webhook processing error:', err);
+    // Graceful Fallback: Tell the user the bot is down instead of ignoring them
+    if (senderPhone) {
+        try {
+            await sendWhatsApp(senderPhone, { type: 'text', text: { body: "⚠️ Maintenance Mode: Our AI assistant is currently updating. Please try again in a few minutes or call us directly." } });
+        } catch (e) {
+            console.error("Failed to send error notice");
+        }
+    }
   }
 });
 
+// Catch-all must be last
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'dist', 'index.html')));
 
 Promise.all([loadInventory(), loadServerConfig()]).then(() => {
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n✅ SERVER STARTED ON PORT: ${PORT}`);
-    console.log(`   Webhook: ${DOMAIN}/webhook`);
+    console.log(`   Health Check: http://127.0.0.1:${PORT}/health`);
     console.log("==================================================\n");
   });
 
   server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
       console.error(`\n❌ CRITICAL ERROR: Port ${PORT} is already in use!`);
-      console.error(`   You must run: 'fuser -k ${PORT}/tcp' to kill the old process.`);
       process.exit(1);
     } else {
       console.error(e);

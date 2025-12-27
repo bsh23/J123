@@ -2,7 +2,7 @@ import { GoogleGenAI, Type, FunctionDeclaration } from "@google/genai";
 import { Product, Message } from "../types";
 import { GOOGLE_API_KEY } from "../config";
 
-const MODEL_NAME = 'gemini-3-pro-preview';
+const MODEL_NAME = 'gemini-3-flash-preview';
 
 function removeEmojis(text: string): string {
   // Optional: You can keep emojis if you want the bot to be friendly
@@ -104,7 +104,7 @@ export const generateBotResponse = async (
     // Handle current user message
     const currentParts: any[] = [];
     if (image) {
-      currentParts.push({ inlineData: { mimeType: 'image/png', data: image.split(',')[1] } });
+       currentParts.push({ inlineData: { mimeType: 'image/png', data: image.split(',')[1] } });
     }
     currentParts.push({ text: userMessage || "Analyze this image" });
 

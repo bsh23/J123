@@ -1,7 +1,8 @@
 // Configuration for API Credentails and Environment Variables
 
 // Google Gemini API Key
-export const GOOGLE_API_KEY = process.env.API_KEY || 'AIzaSyCJCadcY_3IYriBRbm1Th2ZMk7W_-sc2Fk';
+// MUST BE SET IN ENVIRONMENT VARIABLES
+export const GOOGLE_API_KEY = process.env.API_KEY || '';
 
 // Facebook / WhatsApp Business API Credentials
 // Replaced with specific credentials provided
