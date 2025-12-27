@@ -5,6 +5,7 @@ import axios from 'axios';
 import { GoogleGenAI, Type } from '@google/genai';
 import { fileURLToPath } from 'url';
 import { readFile, writeFile } from 'fs/promises';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,23 +17,27 @@ app.use(express.json({ limit: '50mb' }));
 const PORT = 5041; 
 const DOMAIN = 'https://whatsapp.johntechvendorsltd.co.ke';
 const DATA_FILE = path.join(__dirname, 'inventory.json');
+const CHATS_FILE = path.join(__dirname, 'chats.json');
 const CONFIG_FILE = path.join(__dirname, 'server-config.json');
 
 // --- STATE MANAGEMENT ---
 let productInventory = [];
+let chatSessions = {}; // In-memory storage for chats (synced to file)
 
 // Fallback credentials
 let serverConfig = {
-  accessToken: process.env.FB_ACCESS_TOKEN || 'EAAZAphZBPWU7wBQT7Y3mmkG7lbOhb2MgO0CZBZBfDFJhoSlcDD3QaRZAOW3OZAwyVOpuBmyEJzZBO6Id33MMMtsBZBq3jm78GeLi71H2ZCw26d6INUtZCSrfqFgZAwZAESTsDpHB51lwEGmvTsn20qBjtQPQKuX0ApygP12SHZAm1Qszfd8DNBndmnUWZAV3aKs2qTQjEDEAZDZD',
-  phoneNumberId: process.env.FB_PHONE_NUMBER_ID || '849028871635662',
+  accessToken: process.env.FB_ACCESS_TOKEN || '',
+  phoneNumberId: process.env.FB_PHONE_NUMBER_ID || '',
   verifyToken: process.env.FB_VERIFY_TOKEN || 'johntech_verify_token',
-  appId: process.env.FB_APP_ID || '1804882224239548',
-  appSecret: process.env.FB_APP_SECRET || '5444a89d5cbf3ce81e8aa985268390b5'
+  appId: process.env.FB_APP_ID || '',
+  appSecret: process.env.FB_APP_SECRET || ''
 };
 
 // --- LOGGING MIDDLEWARE ---
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  if (!req.url.includes('/render-image') && !req.url.includes('/api/chats')) {
+      console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  }
   next();
 });
 
@@ -45,6 +50,25 @@ async function loadInventory() {
   } catch (err) {
     console.log('📦 INVENTORY: Starting empty.');
     productInventory = [];
+  }
+}
+
+async function loadChats() {
+  try {
+    const data = await readFile(CHATS_FILE, 'utf8');
+    chatSessions = JSON.parse(data);
+    console.log(`💬 CHATS: Loaded history for ${Object.keys(chatSessions).length} contacts.`);
+  } catch (err) {
+    console.log('💬 CHATS: Starting empty.');
+    chatSessions = {};
+  }
+}
+
+async function saveChats() {
+  try {
+    await writeFile(CHATS_FILE, JSON.stringify(chatSessions, null, 2));
+  } catch (err) {
+    console.error('❌ CHAT STORAGE ERROR:', err.message);
   }
 }
 
@@ -82,9 +106,7 @@ async function saveServerConfig() {
 }
 
 // --- GEMINI SETUP ---
-// Key removed due to leak. Must be provided via Environment Variable.
 const getApiKey = () => process.env.API_KEY; 
-// CHANGED: Using Flash model to avoid Quota Exceeded (429) errors
 const MODEL_NAME = 'gemini-3-flash-preview';
 
 // --- TOOLS ---
@@ -102,7 +124,7 @@ const displayProductTool = {
 
 const escalateToAdminTool = {
   name: 'escalateToAdmin',
-  description: 'Notify admin for high buying intent, custom fabrication, or out-of-stock items.',
+  description: 'Notify admin when the customer is ready to buy, asks for payment details, or requests custom fabrication.',
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -114,35 +136,37 @@ const escalateToAdminTool = {
 
 const getSystemInstruction = (products) => {
   const productCatalogStr = products.length > 0 
-    ? products.map(p => `ID: ${p.id}, Name: ${p.name}, Price Range: KSh ${p.priceRange.min} - ${p.priceRange.max}, Desc: ${p.description}`).join('\n')
-    : "NO SPECIFIC ITEMS CURRENTLY IN STOCK. Inform customer we fabricate custom Vending Machines upon request.";
+    ? products.map(p => `ID: ${p.id}, Name: ${p.name}, Price: KSh ${p.priceRange.min} - ${p.priceRange.max}, Desc: ${p.description}`).join('\n')
+    : "NO SPECIFIC ITEMS CURRENTLY IN STOCK. Inform customer we fabricate custom Vending Machines (Milk, Salad, Water) upon request.";
 
-  return `You are a friendly and expert Sales Agent for "JohnTech Vendors Ltd" in Kenya.
-  
+  return `You are "John", a friendly local sales agent for "JohnTech Vendors Ltd" in Kenya.
+
+  STRICT RULES (Adhere or fail):
+  1. **NO Special Characters:** Do NOT use asterisks (**bold**) or hashes (##). Write plain text only.
+  2. **Be Concise:** Keep responses short (under 40 words) unless explaining a complex technical detail. Chat like a human on WhatsApp, not a robot writing an essay.
+  3. **No Hallucinations:** Only sell what is in the INVENTORY LIST below. If they ask for something else, say we can "fabricate it locally" but don't invent specs.
+  4. **Images:** If you show a product, send the image first, then describe it briefly.
+  5. **Closing:** If they seem ready to buy or ask "How do I pay?", call the 'escalateToAdmin' tool immediately.
+
   CORE BUSINESS:
-  We manufacture and sell high-quality Vending Machines:
-  1. Milk ATMs (Pasteurized milk dispensers).
-  2. Salad Oil ATMs (Cooking oil dispensers).
-  3. Water Vending Machines (Pure water).
-  4. Reverse Osmosis (RO) Systems (Water purification).
-
-  KEY BUSINESS DETAILS (Use these in conversation):
-  - Location: Thika Road, Kihunguro, Behind Shell Petrol Station.
-  - Delivery: We deliver countrywide (Kenya).
-  - Warranty: All machines come with a 1-Year Warranty.
-
-  SALES STRATEGY:
-  - **Be Persuasive but Natural:** Mention it's a "highly profitable business".
-  - **Visuals:** ALWAYS use 'displayProduct' tool when describing a machine.
-  - **Pricing:** Give the price range confidently.
+  - Milk ATMs, Salad Oil ATMs, Water Vending, RO Systems.
+  - Location: Thika Road, Kihunguro.
+  - Warranty: 1 Year.
   
   INVENTORY LIST:
   ${productCatalogStr}`;
 };
 
+// --- HELPER: FORMAT TEXT ---
+function formatResponseText(text) {
+    if (!text) return "";
+    // Remove markdown symbols that clutter WhatsApp
+    return text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/##/g, '').replace(/__/g, '');
+}
+
 // --- ROUTES ---
 
-// 0. Health Check (Important for 502 debugging)
+// 0. Health Check
 app.get('/health', (req, res) => res.status(200).send('OK'));
 
 // 1. Static Files
@@ -162,7 +186,14 @@ app.post('/api/products', async (req, res) => {
   }
 });
 
-// 3. Settings API
+// 3. Chat API (For Dashboard)
+app.get('/api/chats', (req, res) => {
+    // Convert object to array for frontend
+    const chatsArray = Object.values(chatSessions).sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
+    res.json(chatsArray);
+});
+
+// 4. Settings API
 app.post('/api/settings', async (req, res) => {
   const { accessToken, phoneNumberId, businessAccountId, appId, appSecret, verifyToken } = req.body;
   serverConfig = {
@@ -187,7 +218,7 @@ app.get('/api/settings', (req, res) => {
   });
 });
 
-// 4. Verify Meta Config
+// 5. Verify Meta Config
 app.post('/api/verify-meta-config', async (req, res) => {
   const { accessToken, phoneNumberId } = req.body;
   if (!accessToken || !phoneNumberId) {
@@ -203,7 +234,7 @@ app.post('/api/verify-meta-config', async (req, res) => {
   }
 });
 
-// 5. Image Render
+// 6. Image Render
 app.get('/api/render-image/:productId/:index', (req, res) => {
   const { productId, index } = req.params;
   const product = productInventory.find(p => p.id === productId);
@@ -240,6 +271,39 @@ async function downloadMetaImage(mediaId) {
 async function sendWhatsApp(to, payload) {
   if (!serverConfig.accessToken || !serverConfig.phoneNumberId) return;
   try {
+    // Save Outgoing Message to Storage
+    const sessionId = to;
+    if (!chatSessions[sessionId]) {
+        chatSessions[sessionId] = {
+            id: sessionId,
+            contactName: `Client ${sessionId.slice(-4)}`,
+            messages: [],
+            lastMessage: '',
+            lastMessageTime: new Date(),
+            unreadCount: 0,
+            isEscalated: false
+        };
+    }
+
+    let storageMsg = {
+        id: Date.now().toString(),
+        sender: 'bot',
+        timestamp: new Date(),
+        type: payload.type
+    };
+
+    if (payload.type === 'text') storageMsg.text = payload.text.body;
+    if (payload.type === 'image') {
+        storageMsg.text = 'Sent an image';
+        storageMsg.image = payload.image.link; 
+    }
+
+    chatSessions[sessionId].messages.push(storageMsg);
+    chatSessions[sessionId].lastMessage = storageMsg.text || 'Media';
+    chatSessions[sessionId].lastMessageTime = new Date();
+    saveChats(); // Persist to file
+
+    // Send to Meta
     await axios.post(
       `https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`, 
       { messaging_product: 'whatsapp', recipient_type: 'individual', to, ...payload }, 
@@ -250,7 +314,7 @@ async function sendWhatsApp(to, payload) {
   }
 }
 
-// 6. Webhook Verification
+// 7. Webhook Verification
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -265,11 +329,10 @@ app.get('/webhook', (req, res) => {
   }
 });
 
-// 7. Webhook Handler
+// 8. Webhook Handler
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200); 
 
-  // We define these outside the try block so they are available in catch
   let senderPhone = null;
 
   try {
@@ -281,43 +344,95 @@ app.post('/webhook', async (req, res) => {
     const messageType = messageObj.type;
     const apiKey = getApiKey();
 
-    if (!apiKey) {
-      console.error("❌ MISSING GEMINI API KEY");
-      await sendWhatsApp(senderPhone, { type: 'text', text: { body: "⚠️ System Alert: AI Config Missing. Please contact admin." } });
-      return;
+    // --- SAVE INCOMING MESSAGE ---
+    if (!chatSessions[senderPhone]) {
+        chatSessions[senderPhone] = {
+            id: senderPhone,
+            contactName: messageObj.contacts?.[0]?.profile?.name || `Client ${senderPhone.slice(-4)}`,
+            messages: [],
+            lastMessage: '',
+            lastMessageTime: new Date(),
+            unreadCount: 0,
+            isEscalated: false
+        };
     }
 
+    let incomingMsg = {
+        id: messageObj.id,
+        sender: 'user',
+        timestamp: new Date(),
+        type: 'text',
+        text: ''
+    };
+
+    // --- PROCESS MESSAGE ---
     let geminiParts = [];
 
     if (messageType === 'text') {
       console.log(`📩 Text from ${senderPhone}: ${messageObj.text.body}`);
       geminiParts.push({ text: messageObj.text.body });
+      incomingMsg.text = messageObj.text.body;
     } else if (messageType === 'image') {
       console.log(`📷 Image from ${senderPhone}`);
       const media = await downloadMetaImage(messageObj.image.id);
+      incomingMsg.type = 'image';
+      incomingMsg.text = messageObj.image.caption || 'Photo';
+      // For dashboard display, we store base64 as the image source
       if (media) {
-        geminiParts.push({ inlineData: { mimeType: media.mimeType, data: media.base64 } });
-        geminiParts.push({ text: messageObj.image.caption || "Analyze this image." });
+         incomingMsg.image = `data:${media.mimeType};base64,${media.base64}`;
+         geminiParts.push({ inlineData: { mimeType: media.mimeType, data: media.base64 } });
+         geminiParts.push({ text: messageObj.image.caption || "Analyze this image." });
       }
     } else {
       return; 
     }
 
+    // Update Session
+    chatSessions[senderPhone].messages.push(incomingMsg);
+    chatSessions[senderPhone].lastMessage = incomingMsg.text;
+    chatSessions[senderPhone].lastMessageTime = new Date();
+    chatSessions[senderPhone].unreadCount += 1;
+    await saveChats();
+
+    if (!apiKey) {
+      await sendWhatsApp(senderPhone, { type: 'text', text: { body: "⚠️ System Alert: AI Config Missing." } });
+      return;
+    }
+
+    // --- AI GENERATION ---
     const ai = new GoogleGenAI({ apiKey });
+    
+    // Build history for context (Last 10 messages)
+    const historyParts = chatSessions[senderPhone].messages
+        .slice(-10)
+        .filter(m => m.sender !== 'system')
+        .map(m => ({
+            role: m.sender === 'user' ? 'user' : 'model',
+            parts: [{ text: m.text || (m.type === 'image' ? '[Image Sent]' : '') }]
+        }));
+
+    // Remove the very last message we just added to avoid duplication in prompt, 
+    // BUT actually for generateContent with history, it's safer to just use the new input in 'contents'
+    // and passing previous messages in a chat session context is complex in REST. 
+    // We will stick to simple 1-turn context + system prompt for stability in this version,
+    // OR just pass the user's latest message.
+    
     const result = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: { role: 'user', parts: geminiParts },
+      contents: { role: 'user', parts: geminiParts }, // sending only current message
       config: {
         systemInstruction: getSystemInstruction(productInventory),
         tools: [{ functionDeclarations: [displayProductTool, escalateToAdminTool] }],
+        maxOutputTokens: 150, // Force shortness
       },
     });
 
     const content = result.candidates?.[0]?.content;
-    const textResponse = content?.parts?.find(p => p.text)?.text;
+    let textResponse = content?.parts?.find(p => p.text)?.text;
     const functionCalls = content?.parts?.filter(p => p.functionCall);
 
     let imagesToSend = [];
+    let escalate = false;
     
     if (functionCalls) {
       for (const part of functionCalls) {
@@ -327,53 +442,42 @@ app.post('/webhook', async (req, res) => {
            if (product?.images?.length) imagesToSend = product.images.slice(0, 5);
         }
         if (fc.name === 'escalateToAdmin') {
-           await sendWhatsApp(senderPhone, { type: 'text', text: { body: "🚨 Connecting you to an agent..." } });
+           escalate = true;
+           // Mark as escalated in DB
+           chatSessions[senderPhone].isEscalated = true;
+           saveChats();
+           await sendWhatsApp(senderPhone, { type: 'text', text: { body: "🚨 I have notified the admin. They will call you shortly to finalize the deal." } });
         }
       }
     }
 
+    // Send Images First (as full images, not cards)
     if (imagesToSend.length > 0) {
        for (let i = 0; i < imagesToSend.length; i++) {
          const link = `${DOMAIN}/api/render-image/${productInventory.find(p=>p.images.includes(imagesToSend[0])).id}/${i}`;
          await sendWhatsApp(senderPhone, { type: 'image', image: { link } });
-         await new Promise(r => setTimeout(r, 500));
+         await new Promise(r => setTimeout(r, 800)); // Natural pause
        }
     }
 
+    // Send Text Response (Processed)
     if (textResponse) {
+      textResponse = formatResponseText(textResponse);
       await sendWhatsApp(senderPhone, { type: 'text', text: { body: textResponse } });
     }
 
   } catch (err) {
     console.error('Webhook processing error:', err);
-    // Graceful Fallback: Tell the user the bot is down instead of ignoring them
-    if (senderPhone) {
-        try {
-            await sendWhatsApp(senderPhone, { type: 'text', text: { body: "⚠️ Maintenance Mode: Our AI assistant is currently updating. Please try again in a few minutes or call us directly." } });
-        } catch (e) {
-            console.error("Failed to send error notice");
-        }
-    }
   }
 });
 
 // Catch-all must be last
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'dist', 'index.html')));
 
-Promise.all([loadInventory(), loadServerConfig()]).then(() => {
+Promise.all([loadInventory(), loadChats(), loadServerConfig()]).then(() => {
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n✅ SERVER STARTED ON PORT: ${PORT}`);
-    console.log(`   Health Check: http://127.0.0.1:${PORT}/health`);
+    console.log(`   Webhook: ${DOMAIN}/webhook`);
     console.log("==================================================\n");
-  });
-
-  server.on('error', (e) => {
-    if (e.code === 'EADDRINUSE') {
-      console.error(`\n❌ CRITICAL ERROR: Port ${PORT} is already in use!`);
-      process.exit(1);
-    } else {
-      console.error(e);
-      process.exit(1);
-    }
   });
 });

@@ -24,8 +24,8 @@ export interface Message {
   id: string;
   text: string;
   sender: 'user' | 'bot' | 'system';
-  timestamp: Date;
-  type: 'text' | 'image'; // Simplified types
+  timestamp: Date | string; // Allow string date from JSON
+  type: 'text' | 'image'; 
   image?: string; // Single image url/base64
 }
 
@@ -34,6 +34,7 @@ export interface ChatSession {
   contactName: string;
   messages: Message[];
   lastMessage: string;
-  lastMessageTime: Date;
+  lastMessageTime: Date | string;
   unreadCount: number;
+  isEscalated?: boolean; // New field for admin attention
 }
