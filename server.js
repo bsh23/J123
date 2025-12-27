@@ -327,7 +327,10 @@ async function downloadMetaImage(mediaId) {
 }
 
 async function sendWhatsApp(to, payload, isAdmin = false) {
-  if (!serverConfig.accessToken || !serverConfig.phoneNumberId) return;
+  if (!serverConfig.accessToken || !serverConfig.phoneNumberId) {
+      console.error("❌ SEND FAILED: Missing Access Token or Phone ID. Check Settings.");
+      return;
+  }
   try {
     // Save Outgoing Message to Storage
     const sessionId = to;
@@ -411,7 +414,7 @@ app.post('/webhook', async (req, res) => {
     const messageType = messageObj.type;
     const apiKey = getApiKey();
 
-    // --- BLUE TICKS: Mark as Read ---
+    // --- BLUE TICKS: Mark as Read IMMEDIATELY ---
     await markMessageAsRead(messageObj.id);
 
     // --- SAVE INCOMING MESSAGE ---
@@ -457,6 +460,7 @@ app.post('/webhook', async (req, res) => {
       if (media) {
          incomingMsg.image = `data:${media.mimeType};base64,${media.base64}`;
          geminiParts.push({ inlineData: { mimeType: media.mimeType, data: media.base64 } });
+         // Ensure we always have text so Gemini doesn't error out
          geminiParts.push({ text: messageObj.image.caption || "Analyze this image." });
       }
     } else {
@@ -477,9 +481,13 @@ app.post('/webhook', async (req, res) => {
     }
 
     if (!apiKey) {
+      console.log("⚠️ API KEY MISSING");
       await sendWhatsApp(senderPhone, { type: 'text', text: { body: "⚠️ System Alert: AI Config Missing." } });
       return;
     }
+    
+    // SAFETY: If we have no parts (e.g. failed image download), don't call Gemini
+    if (geminiParts.length === 0) return;
 
     // --- AI GENERATION ---
     const ai = new GoogleGenAI({ apiKey });
@@ -489,9 +497,11 @@ app.post('/webhook', async (req, res) => {
     const historyParts = chatSessions[senderPhone].messages
         .slice(0, -1) // Exclude current message (which is in incomingMsg)
         .slice(-15)   // Limit context window to last 15 messages for efficiency
+        .filter(m => m.text || m.type === 'image') // Filter out empty garbage
         .map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
-            parts: [{ text: m.text || (m.type === 'image' ? '[Image Sent]' : '') }]
+            // Safety: Ensure text part is never empty string or Gemini throws 400
+            parts: [{ text: (m.text && m.text.trim() !== '') ? m.text : '[Media Message]' }]
         }));
 
     // Start Chat with History
@@ -507,9 +517,9 @@ app.post('/webhook', async (req, res) => {
     });
 
     // Send Current Message
+    // FIX: sendMessage expects { message: ... } structure in SDK, not raw content object
     const result = await chat.sendMessage({ 
-       role: 'user', 
-       parts: geminiParts 
+       message: { parts: geminiParts }
     });
 
     const content = result.response.candidates?.[0]?.content;
