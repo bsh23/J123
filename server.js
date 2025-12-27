@@ -10,25 +10,24 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '50mb' })); // Increased limit for images
 
 // --- CONFIGURATION ---
-// CRITICAL: Hardcoded to 5025 to match Nginx proxy_pass
-const PORT = 5025; 
-const DOMAIN = 'https://Whatsapp.johntechvendorsltd.co.ke';
+const PORT = 5041; 
+const DOMAIN = 'https://whatsapp.johntechvendorsltd.co.ke';
 const DATA_FILE = path.join(__dirname, 'inventory.json');
 const CONFIG_FILE = path.join(__dirname, 'server-config.json');
 
 // --- STATE MANAGEMENT ---
 let productInventory = [];
 
-// Fallback credentials
+// Fallback credentials (UPDATED WITH PROVIDED KEYS)
 let serverConfig = {
-  accessToken: process.env.FB_ACCESS_TOKEN || '',
-  phoneNumberId: process.env.FB_PHONE_NUMBER_ID || '',
+  accessToken: process.env.FB_ACCESS_TOKEN || 'EAAZAphZBPWU7wBQT7Y3mmkG7lbOhb2MgO0CZBZBfDFJhoSlcDD3QaRZAOW3OZAwyVOpuBmyEJzZBO6Id33MMMtsBZBq3jm78GeLi71H2ZCw26d6INUtZCSrfqFgZAwZAESTsDpHB51lwEGmvTsn20qBjtQPQKuX0ApygP12SHZAm1Qszfd8DNBndmnUWZAV3aKs2qTQjEDEAZDZD',
+  phoneNumberId: process.env.FB_PHONE_NUMBER_ID || '849028871635662',
   verifyToken: process.env.FB_VERIFY_TOKEN || 'johntech_verify_token',
-  appId: process.env.FB_APP_ID,
-  appSecret: process.env.FB_APP_SECRET
+  appId: process.env.FB_APP_ID || '1804882224239548',
+  appSecret: process.env.FB_APP_SECRET || '5444a89d5cbf3ce81e8aa985268390b5'
 };
 
 // --- PERSISTENCE FUNCTIONS ---
@@ -77,7 +76,8 @@ async function saveServerConfig() {
 }
 
 // --- GEMINI SETUP ---
-const getApiKey = () => process.env.API_KEY; 
+// Using provided Gemini Key as default
+const getApiKey = () => process.env.API_KEY || 'AIzaSyCJCadcY_3IYriBRbm1Th2ZMk7W_-sc2Fk'; 
 const MODEL_NAME = 'gemini-3-pro-preview';
 
 // --- TOOLS ---
@@ -271,8 +271,7 @@ app.post('/webhook', async (req, res) => {
     const apiKey = getApiKey();
 
     if (!apiKey) {
-      console.error("❌ MISSING GEMINI API KEY - Cannot process message. Please set 'API_KEY' in env.");
-      await sendWhatsApp(senderPhone, { type: 'text', text: { body: "⚠️ Bot Error: API Key missing on server." } });
+      console.error("❌ MISSING GEMINI API KEY");
       return;
     }
 

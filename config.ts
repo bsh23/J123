@@ -1,20 +1,20 @@
 // Configuration for API Credentails and Environment Variables
 
 // Google Gemini API Key
-export const GOOGLE_API_KEY = process.env.API_KEY || '';
+export const GOOGLE_API_KEY = process.env.API_KEY || 'AIzaSyCJCadcY_3IYriBRbm1Th2ZMk7W_-sc2Fk';
 
 // Facebook / WhatsApp Business API Credentials
-// Replace these strings with your actual credentials before deploying to VPS
-// Domain: Whatsapp.johntechvendorsltd.co.ke
+// Replaced with specific credentials provided
+// Domain: whatsapp.johntechvendorsltd.co.ke
 export const FACEBOOK_CONFIG = {
-  APP_ID: process.env.FB_APP_ID || '',
-  APP_SECRET: process.env.FB_APP_SECRET || '',
-  ACCESS_TOKEN: process.env.FB_ACCESS_TOKEN || 'EAAZAphZBPWU7wBQcSmygoGZBaBuFHbhJE5YXkGzOpQqhfmCKdu9gtUrYZBWZCdOaP4ECRb4G5nZCPWXImRyrLQSe03bpHVte9vdYE52knQXrh3YK8bu85WjJlCzVxnHjFWj8qJ5c9ZBCjH2Vcz5pdOjZARFu9RC8YrpJ7ZAESsgfRYDhdxo0jKZCGuoTMU7tEqOZCPfKAZDZD',
+  APP_ID: process.env.FB_APP_ID || '1804882224239548',
+  APP_SECRET: process.env.FB_APP_SECRET || '5444a89d5cbf3ce81e8aa985268390b5',
+  ACCESS_TOKEN: process.env.FB_ACCESS_TOKEN || 'EAAZAphZBPWU7wBQT7Y3mmkG7lbOhb2MgO0CZBZBfDFJhoSlcDD3QaRZAOW3OZAwyVOpuBmyEJzZBO6Id33MMMtsBZBq3jm78GeLi71H2ZCw26d6INUtZCSrfqFgZAwZAESTsDpHB51lwEGmvTsn20qBjtQPQKuX0ApygP12SHZAm1Qszfd8DNBndmnUWZAV3aKs2qTQjEDEAZDZD',
   VERIFY_TOKEN: process.env.FB_VERIFY_TOKEN || 'johntech_verify_token',
   PHONE_NUMBER_ID: process.env.FB_PHONE_NUMBER_ID || '849028871635662',
   BUSINESS_ACCOUNT_ID: process.env.FB_BUSINESS_ACCOUNT_ID || '',
-  // This is the URL you will configure in Meta Developer Dashboard
-  WEBHOOK_URL: 'https://Whatsapp.johntechvendorsltd.co.ke/webhook'
+  // This is the URL configured in Meta Developer Dashboard
+  WEBHOOK_URL: 'https://whatsapp.johntechvendorsltd.co.ke/webhook'
 };
 
 export const BUSINESS_DETAILS = {
