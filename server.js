@@ -400,18 +400,19 @@ app.post('/webhook', async (req, res) => {
       history: historyParts
     });
 
+    // --- FIX: USE NEW SDK RESPONSE HANDLING ---
     const result = await chat.sendMessage({ message: { parts: geminiParts } });
 
-    const content = result.response.candidates?.[0]?.content;
-    let textResponse = content?.parts?.find(p => p.text)?.text;
-    const functionCalls = content?.parts?.filter(p => p.functionCall);
+    // The 'result' IS the Response object in the new SDK.
+    // We use the getter properties directly.
+    let textResponse = result.text;
+    const functionCalls = result.functionCalls; 
 
     let imagesToSend = [];
     let shouldSilentLock = false;
     
-    if (functionCalls) {
-      for (const part of functionCalls) {
-        const fc = part.functionCall;
+    if (functionCalls && functionCalls.length > 0) {
+      for (const fc of functionCalls) {
         if (fc.name === 'displayProduct') {
            const product = productInventory.find(p => p.id === fc.args.productId);
            if (product?.images?.length) imagesToSend = product.images.slice(0, 5);
