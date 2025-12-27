@@ -139,7 +139,14 @@ function formatResponseText(text) {
 
 // --- ROUTES ---
 app.get('/health', (req, res) => res.status(200).send('OK'));
-app.use(express.static(path.join(__dirname, 'dist')));
+
+// Serve static files if they exist
+const distPath = path.join(__dirname, 'dist');
+if (fs.existsSync(distPath)) {
+    app.use(express.static(distPath));
+} else {
+    console.warn("⚠️ 'dist' folder missing. Skipping static file serving.");
+}
 
 app.get('/api/products', (req, res) => res.json(productInventory || []));
 app.post('/api/products', async (req, res) => {
@@ -400,11 +407,9 @@ app.post('/webhook', async (req, res) => {
       history: historyParts
     });
 
-    // --- FIX: USE NEW SDK RESPONSE HANDLING ---
     const result = await chat.sendMessage({ message: { parts: geminiParts } });
 
-    // The 'result' IS the Response object in the new SDK.
-    // We use the getter properties directly.
+    // API Handling using getters
     let textResponse = result.text;
     const functionCalls = result.functionCalls; 
 
@@ -451,8 +456,24 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Catch-all
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'dist', 'index.html')));
+// SAFE CATCH-ALL FOR FRONTEND
+app.get('*', (req, res) => {
+  const indexPath = path.join(__dirname, 'dist', 'index.html');
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.status(503).send(`
+      <html>
+        <body style="font-family:sans-serif; text-align:center; padding:50px;">
+          <h1>Maintenance in Progress</h1>
+          <p>The dashboard is currently building. Please refresh in 2 minutes.</p>
+          <hr>
+          <p><em>Admin: Run 'npm run build' on the server.</em></p>
+        </body>
+      </html>
+    `);
+  }
+});
 
 Promise.all([loadInventory(), loadChats(), loadServerConfig()]).then(() => {
   const server = app.listen(PORT, '0.0.0.0', () => {
