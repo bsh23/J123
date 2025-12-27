@@ -1,0 +1,5 @@
+{
+  "name": "J1",
+  "description": "WhatsApp-style chatbot for JohnTech Vendors Ltd powered by Gemini.",
+  "requestFramePermissions": []
+}
