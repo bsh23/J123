@@ -139,18 +139,23 @@ const getSystemInstruction = (products) => {
     ? products.map(p => `ID: ${p.id}, Name: ${p.name}, Price: KSh ${p.priceRange.min} - ${p.priceRange.max}, Desc: ${p.description}`).join('\n')
     : "NO SPECIFIC ITEMS CURRENTLY IN STOCK. Inform customer we fabricate custom Vending Machines (Milk, Salad, Water) upon request.";
 
-  return `You are "John", a friendly local sales agent for "JohnTech Vendors Ltd" in Kenya.
+  return `You are "John", the expert sales agent for "JohnTech Vendors Ltd" in Kenya.
 
-  STRICT RULES (Adhere or fail):
+  BUSINESS LOCATION:
+  Thika Road, Kihunguro, behind Shell Petrol Station. (Be very clear about this if asked).
+
+  YOUR PERSONALITY & STYLE:
+  1. **Mirror the User:** If the user is casual/slangy (using Sheng), be casual. If they are formal, be formal. Adapt your tone to make them comfortable.
+  2. **Product Expert:** You know the specs below perfectly. Do not hallucinate features not listed. If a feature isn't listed, say we can "fabricate to your specifications" as we are manufacturers.
+  3. **No Robot Speak:** Avoid starting sentences with "As an AI..." or "I can help you with...". Just dive into the answer.
+
+  OPERATIONAL RULES:
   1. **NO Special Characters:** Do NOT use asterisks (**bold**) or hashes (##). Write plain text only.
-  2. **Be Concise:** Keep responses short (under 40 words) unless explaining a complex technical detail. Chat like a human on WhatsApp, not a robot writing an essay.
-  3. **No Hallucinations:** Only sell what is in the INVENTORY LIST below. If they ask for something else, say we can "fabricate it locally" but don't invent specs.
-  4. **Images:** If you show a product, send the image first, then describe it briefly.
-  5. **Closing:** If they seem ready to buy or ask "How do I pay?", call the 'escalateToAdmin' tool immediately.
+  2. **Images First:** If showcasing a product, trigger the image tool first, then describe it.
+  3. **Closing:** If they seem ready to buy or ask "How do I pay?", call the 'escalateToAdmin' tool immediately.
 
   CORE BUSINESS:
   - Milk ATMs, Salad Oil ATMs, Water Vending, RO Systems.
-  - Location: Thika Road, Kihunguro.
   - Warranty: 1 Year.
   
   INVENTORY LIST:
@@ -191,6 +196,23 @@ app.get('/api/chats', (req, res) => {
     // Convert object to array for frontend
     const chatsArray = Object.values(chatSessions).sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
     res.json(chatsArray);
+});
+
+// 3b. Send Message API (For Admin Dashboard Reply)
+app.post('/api/send-message', async (req, res) => {
+    const { to, text } = req.body;
+    
+    if (!to || !text) {
+        return res.status(400).json({ error: 'Missing "to" (phone) or "text" field' });
+    }
+
+    try {
+        await sendWhatsApp(to, { type: 'text', text: { body: text } });
+        res.json({ success: true });
+    } catch (err) {
+        console.error("Admin Reply Error:", err);
+        res.status(500).json({ error: 'Failed to send message' });
+    }
 });
 
 // 4. Settings API
@@ -253,6 +275,19 @@ app.get('/api/render-image/:productId/:index', (req, res) => {
 // --- WHATSAPP HELPERS ---
 const getAuthHeaders = () => ({ Authorization: `Bearer ${serverConfig.accessToken}` });
 
+async function markMessageAsRead(messageId) {
+    if (!serverConfig.accessToken || !serverConfig.phoneNumberId) return;
+    try {
+        await axios.post(
+            `https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`,
+            { messaging_product: 'whatsapp', status: 'read', message_id: messageId },
+            { headers: getAuthHeaders() }
+        );
+    } catch (err) {
+        console.error("Blue Tick Error:", err.message);
+    }
+}
+
 async function downloadMetaImage(mediaId) {
   if (!serverConfig.accessToken) return null;
   try {
@@ -301,6 +336,8 @@ async function sendWhatsApp(to, payload) {
     chatSessions[sessionId].messages.push(storageMsg);
     chatSessions[sessionId].lastMessage = storageMsg.text || 'Media';
     chatSessions[sessionId].lastMessageTime = new Date();
+    // If Admin sent it (payload manually via API), reset unread count
+    chatSessions[sessionId].unreadCount = 0; 
     saveChats(); // Persist to file
 
     // Send to Meta
@@ -311,6 +348,7 @@ async function sendWhatsApp(to, payload) {
     );
   } catch (err) {
     console.error("Send Error:", err.response?.data || err.message);
+    throw err; // Propagate for API responses
   }
 }
 
@@ -344,17 +382,24 @@ app.post('/webhook', async (req, res) => {
     const messageType = messageObj.type;
     const apiKey = getApiKey();
 
+    // --- BLUE TICKS: Mark as Read ---
+    await markMessageAsRead(messageObj.id);
+
     // --- SAVE INCOMING MESSAGE ---
     if (!chatSessions[senderPhone]) {
         chatSessions[senderPhone] = {
             id: senderPhone,
-            contactName: messageObj.contacts?.[0]?.profile?.name || `Client ${senderPhone.slice(-4)}`,
+            contactName: messageObj.contacts?.[0]?.profile?.name || `Client ${senderPhone}`,
             messages: [],
             lastMessage: '',
             lastMessageTime: new Date(),
             unreadCount: 0,
             isEscalated: false
         };
+    } else {
+        // Update contact name if available
+        const newName = messageObj.contacts?.[0]?.profile?.name;
+        if (newName) chatSessions[senderPhone].contactName = newName;
     }
 
     let incomingMsg = {
@@ -402,28 +447,14 @@ app.post('/webhook', async (req, res) => {
     // --- AI GENERATION ---
     const ai = new GoogleGenAI({ apiKey });
     
-    // Build history for context (Last 10 messages)
-    const historyParts = chatSessions[senderPhone].messages
-        .slice(-10)
-        .filter(m => m.sender !== 'system')
-        .map(m => ({
-            role: m.sender === 'user' ? 'user' : 'model',
-            parts: [{ text: m.text || (m.type === 'image' ? '[Image Sent]' : '') }]
-        }));
-
-    // Remove the very last message we just added to avoid duplication in prompt, 
-    // BUT actually for generateContent with history, it's safer to just use the new input in 'contents'
-    // and passing previous messages in a chat session context is complex in REST. 
-    // We will stick to simple 1-turn context + system prompt for stability in this version,
-    // OR just pass the user's latest message.
-    
     const result = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: { role: 'user', parts: geminiParts }, // sending only current message
+      contents: { role: 'user', parts: geminiParts }, 
       config: {
         systemInstruction: getSystemInstruction(productInventory),
         tools: [{ functionDeclarations: [displayProductTool, escalateToAdminTool] }],
-        maxOutputTokens: 150, // Force shortness
+        maxOutputTokens: 800, // INCREASED to prevent cut-offs
+        temperature: 0.7, // Add creativity for style mirroring
       },
     });
 

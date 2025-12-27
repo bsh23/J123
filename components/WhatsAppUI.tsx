@@ -4,7 +4,6 @@ import {
   MoreVertical, Search, Paperclip, Smile, Mic, 
   Send, CheckCheck, CircleDashed, Phone, Video, ArrowLeft, Lock, AlertTriangle, Image as ImageIcon
 } from 'lucide-react';
-import { generateBotResponse } from '../services/geminiService';
 
 interface WhatsAppUIProps {
   products: Product[];
@@ -17,6 +16,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [inputText, setInputText] = useState('');
+  const [isSending, setIsSending] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -53,18 +53,49 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
   }, [selectedChatId, chatSessions]);
 
   const handleSendMessage = async (text: string) => {
-    if (!text.trim()) return;
+    if (!text.trim() || !selectedChatId) return;
     
-    // In a real app with two-way sync, we would POST this message to the backend 
-    // so it sends to WhatsApp via Cloud API.
-    // For this dashboard view, we assume it's "Read Only" or "Take Over" via phone for now,
-    // unless we implement the POST /send-message endpoint.
-    
-    // For now, we just clear input to simulate action, 
-    // but typically Admin replies should be done via the actual WhatsApp phone 
-    // OR we implement an endpoint.
-    alert("To reply to this customer, please use your WhatsApp mobile app for now, or ensure the POST /api/send-message endpoint is implemented.");
-    setInputText('');
+    setIsSending(true);
+    try {
+        const res = await fetch('/api/send-message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                to: selectedChatId,
+                text: text.trim()
+            })
+        });
+
+        if (res.ok) {
+            setInputText('');
+            // Optimistically add message to UI (Polling will confirm it)
+            setChatSessions(prev => prev.map(c => {
+                if (c.id === selectedChatId) {
+                    return {
+                        ...c,
+                        messages: [
+                            ...c.messages, 
+                            { 
+                                id: Date.now().toString(), 
+                                text: text.trim(), 
+                                sender: 'bot', 
+                                type: 'text', 
+                                timestamp: new Date() 
+                            }
+                        ]
+                    };
+                }
+                return c;
+            }));
+        } else {
+            alert("Failed to send message via WhatsApp API.");
+        }
+    } catch (err) {
+        console.error("Send failed", err);
+        alert("Network error sending message.");
+    } finally {
+        setIsSending(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -144,6 +175,8 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                     <h3 className="text-gray-900 font-medium truncate">{chat.contactName}</h3>
                     <span className="text-xs text-gray-500">{formatTime(chat.lastMessageTime)}</span>
                   </div>
+                  {/* Phone Number Display */}
+                  <div className="text-xs text-[#008069] font-medium mb-1">+{chat.id}</div>
                   <div className="flex items-center justify-between">
                     <p className="text-sm text-gray-500 truncate flex items-center gap-1 max-w-[70%]">
                       {chat.isEscalated && <Lock size={12} className="text-red-500"/>}
@@ -188,9 +221,8 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                   <span className="text-gray-900 font-medium text-base truncate max-w-[150px] md:max-w-none">
                     {selectedChat.contactName}
                   </span>
-                  <span className={`text-xs ${isChatLocked ? 'text-red-600 font-bold' : 'text-gray-500'}`}>
-                    {isChatLocked ? '⚠️ Customer Wants to Buy' : 'Online'}
-                  </span>
+                  {/* Phone number in Header */}
+                  <span className="text-xs text-gray-500">+{selectedChat.id} • {isChatLocked ? '⚠️ Customer Wants to Buy' : 'Online'}</span>
                 </div>
               </div>
               <div className="flex gap-4 md:gap-6 text-gray-500">
@@ -244,6 +276,8 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                         <div className="absolute bottom-1 right-2 flex items-center gap-1 z-10 h-4">
                           <span className="text-[11px] text-gray-500 min-w-[45px] text-right leading-none">
                             {formatTime(msg.timestamp)}
+                            {/* Simple checks for outgoing messages only */}
+                            {msg.sender !== 'user' && <CheckCheck size={14} className="text-blue-500 ml-1 inline" />}
                           </span>
                         </div>
                       </div>
@@ -254,7 +288,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
               </div>
             </div>
 
-            {/* Input Area (Visual Only for now) */}
+            {/* Input Area */}
             <div className="h-auto min-h-[64px] bg-[#f0f2f5] px-4 py-2 flex items-center gap-2 z-10 flex-shrink-0">
                 <div className="flex gap-4">
                   <Smile size={26} className="text-gray-500 cursor-pointer hover:text-gray-600" />
@@ -265,14 +299,15 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                   <input
                     type="text"
                     className="w-full py-2 px-4 rounded-lg border-none focus:outline-none text-black placeholder-gray-500 bg-white"
-                    placeholder="Type a message (Simulated)"
+                    placeholder="Type a message..."
                     value={inputText}
                     onChange={(e) => setInputText(e.target.value)}
                     onKeyDown={handleKeyDown}
+                    disabled={isSending}
                   />
                 </div>
                 <div className="">
-                    <button onClick={() => handleSendMessage(inputText)} className="p-2 text-[#008069]">
+                    <button onClick={() => handleSendMessage(inputText)} disabled={isSending} className={`p-2 ${isSending ? 'text-gray-400' : 'text-[#008069]'}`}>
                         <Send size={24} />
                     </button>
                 </div>
