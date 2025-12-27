@@ -481,13 +481,15 @@ app.post('/webhook', async (req, res) => {
     }
 
     if (!apiKey) {
-      console.log("⚠️ API KEY MISSING");
-      await sendWhatsApp(senderPhone, { type: 'text', text: { body: "⚠️ System Alert: AI Config Missing." } });
+      console.log("⚠️ API KEY MISSING in .env file. Bot cannot respond.");
+      await sendWhatsApp(senderPhone, { type: 'text', text: { body: "⚠️ System Alert: AI Config Missing. Please check server logs." } });
       return;
     }
     
     // SAFETY: If we have no parts (e.g. failed image download), don't call Gemini
     if (geminiParts.length === 0) return;
+
+    console.log(`🤖 Generating AI Response for ${senderPhone}...`);
 
     // --- AI GENERATION ---
     const ai = new GoogleGenAI({ apiKey });
@@ -552,6 +554,7 @@ app.post('/webhook', async (req, res) => {
         chatSessions[senderPhone].isEscalated = true;
         await saveChats();
         // 3. DO NOT SEND TEXT RESPONSE (Silent Lock)
+        console.log(`🔒 Bot Locked Silently (Escalation).`);
         return; 
     }
 
@@ -567,11 +570,12 @@ app.post('/webhook', async (req, res) => {
     // Send Text Response 
     if (textResponse) {
       textResponse = formatResponseText(textResponse);
+      console.log(`🤖 Bot Reply: ${textResponse.substring(0, 50)}...`);
       await sendWhatsApp(senderPhone, { type: 'text', text: { body: textResponse } });
     }
 
   } catch (err) {
-    console.error('Webhook processing error:', err);
+    console.error('❌ Webhook AI/Logic Error:', err);
   }
 });
 
@@ -580,8 +584,18 @@ app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'dist', 'index.html
 
 Promise.all([loadInventory(), loadChats(), loadServerConfig()]).then(() => {
   const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n✅ SERVER STARTED ON PORT: ${PORT}`);
+    console.log("________________________________________________________________");
+    console.log(`✅ SERVER STARTED ON PORT: ${PORT}`);
+    
+    if (!process.env.API_KEY) {
+        console.error("❌ CRITICAL ERROR: API_KEY is missing from environment variables.");
+        console.error("   The Bot will NOT respond to messages.");
+        console.error("   Please ensure .env file exists and contains API_KEY.");
+    } else {
+        console.log("✅ API_KEY loaded successfully.");
+        console.log("✅ Bot is ready to reply.");
+    }
     console.log(`   Webhook: ${DOMAIN}/webhook`);
-    console.log("==================================================\n");
+    console.log("________________________________________________________________\n");
   });
 });
