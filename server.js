@@ -124,11 +124,11 @@ const displayProductTool = {
 
 const escalateToAdminTool = {
   name: 'escalateToAdmin',
-  description: 'Notify admin when the customer is ready to buy, asks for payment details, or requests custom fabrication.',
+  description: 'SILENTLY lock conversation and notify admin. Call this for: Buying Intent (Payment), Technical Questions (Service/Profit/Specs), Out of Stock items, or Delivery Price.',
   parameters: {
     type: Type.OBJECT,
     properties: {
-      reason: { type: Type.STRING }
+      reason: { type: Type.STRING, description: 'Reason for escalation' }
     },
     required: ['reason']
   }
@@ -136,27 +136,34 @@ const escalateToAdminTool = {
 
 const getSystemInstruction = (products) => {
   const productCatalogStr = products.length > 0 
-    ? products.map(p => `ID: ${p.id}, Name: ${p.name}, Price: KSh ${p.priceRange.min} - ${p.priceRange.max}, Desc: ${p.description}`).join('\n')
+    ? products.map(p => `ID: ${p.id}, Name: ${p.name}, Price: KSh ${p.priceRange.min} - ${p.priceRange.max}, Desc: ${p.description}, Specs: ${JSON.stringify(p.specs)}`).join('\n')
     : "NO SPECIFIC ITEMS CURRENTLY IN STOCK. Inform customer we fabricate custom Vending Machines (Milk, Salad, Water) upon request.";
 
   return `You are "John", the expert sales agent for "JohnTech Vendors Ltd" in Kenya.
 
   BUSINESS LOCATION:
-  Thika Road, Kihunguro, behind Shell Petrol Station. (Be very clear about this if asked).
+  Thika Road, Kihunguro, behind Shell Petrol Station. (Be precise).
 
-  YOUR PERSONALITY & STYLE:
-  1. **Mirror the User:** If the user is casual/slangy (using Sheng), be casual. If they are formal, be formal. Adapt your tone to make them comfortable.
-  2. **Product Expert:** You know the specs below perfectly. Do not hallucinate features not listed. If a feature isn't listed, say we can "fabricate to your specifications" as we are manufacturers.
-  3. **No Robot Speak:** Avoid starting sentences with "As an AI..." or "I can help you with...". Just dive into the answer.
+  YOUR GOAL:
+  Assist the client with product info. However, for serious sales or complex issues, you must HAND OVER to the human admin immediately.
+
+  PERSONALITY:
+  - Mirror the user's tone. If they speak Sheng/Casual, be casual. If Formal, be formal.
+  - Be helpful but concise.
+  
+  CRITICAL RULE - WHEN TO CALL 'escalateToAdmin' (SILENT LOCK):
+  You must call the 'escalateToAdmin' tool and STOP talking if the user asks about:
+  1. **Payment:** "How do I pay?", "M-Pesa number?", "Installments?".
+  2. **Technical Details:** "How does the pump work?", "Profitability calculation?", "Service/Maintenance?", "Power consumption?".
+  3. **Delivery Price:** "How much to transport to Kisumu?".
+  4. **Out of Stock/Custom:** Asking for a machine not in the INVENTORY LIST below.
+  5. **Serious Buying Intent:** "I want to buy now", "Can I come collect?".
+  
+  *When you call 'escalateToAdmin', do NOT generate any text response. The system will handle it.*
 
   OPERATIONAL RULES:
-  1. **NO Special Characters:** Do NOT use asterisks (**bold**) or hashes (##). Write plain text only.
-  2. **Images First:** If showcasing a product, trigger the image tool first, then describe it.
-  3. **Closing:** If they seem ready to buy or ask "How do I pay?", call the 'escalateToAdmin' tool immediately.
-
-  CORE BUSINESS:
-  - Milk ATMs, Salad Oil ATMs, Water Vending, RO Systems.
-  - Warranty: 1 Year.
+  1. **NO Special Characters:** Do NOT use asterisks (**bold**) or hashes (##).
+  2. **Images First:** If showcasing a product, trigger the image tool first.
   
   INVENTORY LIST:
   ${productCatalogStr}`;
@@ -165,7 +172,6 @@ const getSystemInstruction = (products) => {
 // --- HELPER: FORMAT TEXT ---
 function formatResponseText(text) {
     if (!text) return "";
-    // Remove markdown symbols that clutter WhatsApp
     return text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/##/g, '').replace(/__/g, '');
 }
 
@@ -193,12 +199,29 @@ app.post('/api/products', async (req, res) => {
 
 // 3. Chat API (For Dashboard)
 app.get('/api/chats', (req, res) => {
-    // Convert object to array for frontend
     const chatsArray = Object.values(chatSessions).sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
     res.json(chatsArray);
 });
 
-// 3b. Send Message API (For Admin Dashboard Reply)
+// 3b. Toggle Bot Status (Admin Takeover/Release)
+app.post('/api/chat/:id/toggle-bot', async (req, res) => {
+    const { id } = req.params;
+    const { active } = req.body; // true = resume bot, false = stop bot
+
+    if (chatSessions[id]) {
+        chatSessions[id].botActive = active;
+        // If resuming, clear escalation flag so it looks normal
+        if (active) {
+            chatSessions[id].isEscalated = false;
+        }
+        await saveChats();
+        res.json({ success: true, botActive: active });
+    } else {
+        res.status(404).json({ error: "Chat not found" });
+    }
+});
+
+// 3c. Send Message API (For Admin Dashboard Reply)
 app.post('/api/send-message', async (req, res) => {
     const { to, text } = req.body;
     
@@ -207,7 +230,7 @@ app.post('/api/send-message', async (req, res) => {
     }
 
     try {
-        await sendWhatsApp(to, { type: 'text', text: { body: text } });
+        await sendWhatsApp(to, { type: 'text', text: { body: text } }, true); // Pass true for 'isAdmin'
         res.json({ success: true });
     } catch (err) {
         console.error("Admin Reply Error:", err);
@@ -303,26 +326,28 @@ async function downloadMetaImage(mediaId) {
   }
 }
 
-async function sendWhatsApp(to, payload) {
+async function sendWhatsApp(to, payload, isAdmin = false) {
   if (!serverConfig.accessToken || !serverConfig.phoneNumberId) return;
   try {
     // Save Outgoing Message to Storage
     const sessionId = to;
     if (!chatSessions[sessionId]) {
+        // Should exist, but safety check
         chatSessions[sessionId] = {
             id: sessionId,
-            contactName: `Client ${sessionId.slice(-4)}`,
+            contactName: `Client ${sessionId}`,
             messages: [],
             lastMessage: '',
             lastMessageTime: new Date(),
             unreadCount: 0,
-            isEscalated: false
+            isEscalated: false,
+            botActive: true
         };
     }
 
     let storageMsg = {
         id: Date.now().toString(),
-        sender: 'bot',
+        sender: 'bot', // We use 'bot' for UI, but AI sees it as 'model'
         timestamp: new Date(),
         type: payload.type
     };
@@ -336,8 +361,12 @@ async function sendWhatsApp(to, payload) {
     chatSessions[sessionId].messages.push(storageMsg);
     chatSessions[sessionId].lastMessage = storageMsg.text || 'Media';
     chatSessions[sessionId].lastMessageTime = new Date();
-    // If Admin sent it (payload manually via API), reset unread count
-    chatSessions[sessionId].unreadCount = 0; 
+    
+    // If Admin sent it, reset unread count
+    if (isAdmin) {
+        chatSessions[sessionId].unreadCount = 0;
+    }
+    
     saveChats(); // Persist to file
 
     // Send to Meta
@@ -394,12 +423,15 @@ app.post('/webhook', async (req, res) => {
             lastMessage: '',
             lastMessageTime: new Date(),
             unreadCount: 0,
-            isEscalated: false
+            isEscalated: false,
+            botActive: true // Default: Bot is active
         };
     } else {
         // Update contact name if available
         const newName = messageObj.contacts?.[0]?.profile?.name;
         if (newName) chatSessions[senderPhone].contactName = newName;
+        // Ensure botActive is defined (for legacy chats)
+        if (chatSessions[senderPhone].botActive === undefined) chatSessions[senderPhone].botActive = true;
     }
 
     let incomingMsg = {
@@ -422,7 +454,6 @@ app.post('/webhook', async (req, res) => {
       const media = await downloadMetaImage(messageObj.image.id);
       incomingMsg.type = 'image';
       incomingMsg.text = messageObj.image.caption || 'Photo';
-      // For dashboard display, we store base64 as the image source
       if (media) {
          incomingMsg.image = `data:${media.mimeType};base64,${media.base64}`;
          geminiParts.push({ inlineData: { mimeType: media.mimeType, data: media.base64 } });
@@ -439,6 +470,12 @@ app.post('/webhook', async (req, res) => {
     chatSessions[senderPhone].unreadCount += 1;
     await saveChats();
 
+    // --- CHECK IF BOT IS LOCKED ---
+    if (chatSessions[senderPhone].botActive === false) {
+        console.log(`🔒 Bot is LOCKED for ${senderPhone}. Skipping AI response.`);
+        return; // Stop here, Admin handles it.
+    }
+
     if (!apiKey) {
       await sendWhatsApp(senderPhone, { type: 'text', text: { body: "⚠️ System Alert: AI Config Missing." } });
       return;
@@ -447,51 +484,77 @@ app.post('/webhook', async (req, res) => {
     // --- AI GENERATION ---
     const ai = new GoogleGenAI({ apiKey });
     
-    const result = await ai.models.generateContent({
+    // BUILD HISTORY: Include ALL previous messages so bot "remembers" context
+    // and sees what Admin wrote if Admin was active.
+    const historyParts = chatSessions[senderPhone].messages
+        .slice(0, -1) // Exclude current message (which is in incomingMsg)
+        .slice(-15)   // Limit context window to last 15 messages for efficiency
+        .map(m => ({
+            role: m.sender === 'user' ? 'user' : 'model',
+            parts: [{ text: m.text || (m.type === 'image' ? '[Image Sent]' : '') }]
+        }));
+
+    // Start Chat with History
+    const chat = ai.chats.create({
       model: MODEL_NAME,
-      contents: { role: 'user', parts: geminiParts }, 
       config: {
         systemInstruction: getSystemInstruction(productInventory),
         tools: [{ functionDeclarations: [displayProductTool, escalateToAdminTool] }],
-        maxOutputTokens: 800, // INCREASED to prevent cut-offs
-        temperature: 0.7, // Add creativity for style mirroring
+        maxOutputTokens: 800,
+        temperature: 0.7,
       },
+      history: historyParts
     });
 
-    const content = result.candidates?.[0]?.content;
+    // Send Current Message
+    const result = await chat.sendMessage({ 
+       role: 'user', 
+       parts: geminiParts 
+    });
+
+    const content = result.response.candidates?.[0]?.content;
     let textResponse = content?.parts?.find(p => p.text)?.text;
     const functionCalls = content?.parts?.filter(p => p.functionCall);
 
     let imagesToSend = [];
-    let escalate = false;
+    let shouldSilentLock = false;
     
     if (functionCalls) {
       for (const part of functionCalls) {
         const fc = part.functionCall;
+        
         if (fc.name === 'displayProduct') {
            const product = productInventory.find(p => p.id === fc.args.productId);
            if (product?.images?.length) imagesToSend = product.images.slice(0, 5);
         }
+        
         if (fc.name === 'escalateToAdmin') {
-           escalate = true;
-           // Mark as escalated in DB
-           chatSessions[senderPhone].isEscalated = true;
-           saveChats();
-           await sendWhatsApp(senderPhone, { type: 'text', text: { body: "🚨 I have notified the admin. They will call you shortly to finalize the deal." } });
+           shouldSilentLock = true;
+           console.log(`🚨 ESCALATION TRIGGERED: ${fc.args.reason}`);
         }
       }
     }
 
-    // Send Images First (as full images, not cards)
+    if (shouldSilentLock) {
+        // 1. Lock the bot
+        chatSessions[senderPhone].botActive = false;
+        // 2. Flag for Admin (Red Badge)
+        chatSessions[senderPhone].isEscalated = true;
+        await saveChats();
+        // 3. DO NOT SEND TEXT RESPONSE (Silent Lock)
+        return; 
+    }
+
+    // Send Images First 
     if (imagesToSend.length > 0) {
        for (let i = 0; i < imagesToSend.length; i++) {
          const link = `${DOMAIN}/api/render-image/${productInventory.find(p=>p.images.includes(imagesToSend[0])).id}/${i}`;
          await sendWhatsApp(senderPhone, { type: 'image', image: { link } });
-         await new Promise(r => setTimeout(r, 800)); // Natural pause
+         await new Promise(r => setTimeout(r, 800)); 
        }
     }
 
-    // Send Text Response (Processed)
+    // Send Text Response 
     if (textResponse) {
       textResponse = formatResponseText(textResponse);
       await sendWhatsApp(senderPhone, { type: 'text', text: { body: textResponse } });

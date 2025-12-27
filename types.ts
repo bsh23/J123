@@ -36,5 +36,6 @@ export interface ChatSession {
   lastMessage: string;
   lastMessageTime: Date | string;
   unreadCount: number;
-  isEscalated?: boolean; // New field for admin attention
+  isEscalated?: boolean; // True if Admin attention is needed (Red Flag)
+  botActive?: boolean;   // True if Bot is handling, False if locked for Admin
 }

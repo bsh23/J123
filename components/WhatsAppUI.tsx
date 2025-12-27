@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Product, Message, ChatSession } from '../types';
 import { 
-  MoreVertical, Search, Paperclip, Smile, Mic, 
-  Send, CheckCheck, CircleDashed, Phone, Video, ArrowLeft, Lock, AlertTriangle, Image as ImageIcon
+  MoreVertical, Search, Paperclip, Smile, 
+  Send, CheckCheck, CircleDashed, ArrowLeft, Lock, Unlock, Bot
 } from 'lucide-react';
 
 interface WhatsAppUIProps {
@@ -12,7 +12,6 @@ interface WhatsAppUIProps {
 }
 
 const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSettings }) => {
-  // State for Real Chats
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [inputText, setInputText] = useState('');
@@ -20,7 +19,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // --- POLLING FOR CHATS ---
+  // --- POLLING ---
   useEffect(() => {
     const fetchChats = async () => {
       try {
@@ -35,12 +34,13 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
     };
 
     fetchChats();
-    const interval = setInterval(fetchChats, 3000); // Poll every 3 seconds
+    const interval = setInterval(fetchChats, 3000); 
     return () => clearInterval(interval);
   }, []);
 
   const selectedChat = chatSessions.find(c => c.id === selectedChatId);
-  const isChatLocked = selectedChat?.isEscalated || false;
+  const isEscalated = selectedChat?.isEscalated || false;
+  const isBotActive = selectedChat?.botActive !== false; // Default true if undefined
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -68,7 +68,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
 
         if (res.ok) {
             setInputText('');
-            // Optimistically add message to UI (Polling will confirm it)
+            // Optimistic update
             setChatSessions(prev => prev.map(c => {
                 if (c.id === selectedChatId) {
                     return {
@@ -92,9 +92,33 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
         }
     } catch (err) {
         console.error("Send failed", err);
-        alert("Network error sending message.");
     } finally {
         setIsSending(false);
+    }
+  };
+
+  const toggleBot = async () => {
+    if (!selectedChatId) return;
+    const newStatus = !isBotActive;
+    
+    try {
+        const res = await fetch(`/api/chat/${selectedChatId}/toggle-bot`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ active: newStatus })
+        });
+        
+        if (res.ok) {
+            // Force immediate local update
+            setChatSessions(prev => prev.map(c => {
+                if (c.id === selectedChatId) {
+                    return { ...c, botActive: newStatus, isEscalated: newStatus ? false : c.isEscalated };
+                }
+                return c;
+            }));
+        }
+    } catch (err) {
+        console.error("Toggle failed", err);
     }
   };
 
@@ -166,24 +190,24 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                   ${selectedChatId === chat.id ? 'bg-[#f0f2f5]' : 'hover:bg-[#f5f6f6]'}
                 `}
               >
-                <div className="w-12 h-12 rounded-full overflow-hidden flex-shrink-0 border border-gray-100 bg-gray-200 flex items-center justify-center">
-                   {/* Avatar placeholder */}
+                <div className="w-12 h-12 rounded-full overflow-hidden flex-shrink-0 border border-gray-100 bg-gray-200 flex items-center justify-center relative">
                    <span className="text-gray-500 font-bold text-lg">{chat.contactName.charAt(0)}</span>
+                   {chat.isEscalated && (
+                     <div className="absolute bottom-0 right-0 w-3 h-3 bg-red-600 rounded-full border-2 border-white"></div>
+                   )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-baseline">
                     <h3 className="text-gray-900 font-medium truncate">{chat.contactName}</h3>
                     <span className="text-xs text-gray-500">{formatTime(chat.lastMessageTime)}</span>
                   </div>
-                  {/* Phone Number Display */}
                   <div className="text-xs text-[#008069] font-medium mb-1">+{chat.id}</div>
                   <div className="flex items-center justify-between">
                     <p className="text-sm text-gray-500 truncate flex items-center gap-1 max-w-[70%]">
-                      {chat.isEscalated && <Lock size={12} className="text-red-500"/>}
                       {chat.messages[chat.messages.length-1]?.text}
                     </p>
                     {chat.isEscalated && (
-                      <span className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold">Action Needed</span>
+                      <span className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold">Action</span>
                     )}
                   </div>
                 </div>
@@ -204,7 +228,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
             {/* Chat Header */}
             <div className={`
               h-16 px-4 flex items-center justify-between border-b border-gray-200 z-10 flex-shrink-0 transition-colors
-              ${isChatLocked ? 'bg-red-50' : 'bg-[#f0f2f5]'}
+              ${isEscalated ? 'bg-red-50' : 'bg-[#f0f2f5]'}
             `}>
               <div className="flex items-center gap-2 md:gap-4">
                 <button onClick={() => setSelectedChatId(null)} className="md:hidden text-gray-600 mr-1">
@@ -213,21 +237,40 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                 
                 <div className="w-10 h-10 rounded-full overflow-hidden bg-gray-300 flex items-center justify-center relative">
                   <span className="text-lg font-bold text-gray-600">{selectedChat.contactName.charAt(0)}</span>
-                  {isChatLocked && (
-                    <div className="absolute top-0 right-0 w-3 h-3 bg-red-600 rounded-full border-2 border-white"></div>
-                  )}
                 </div>
                 <div className="flex flex-col cursor-pointer">
                   <span className="text-gray-900 font-medium text-base truncate max-w-[150px] md:max-w-none">
                     {selectedChat.contactName}
                   </span>
-                  {/* Phone number in Header */}
-                  <span className="text-xs text-gray-500">+{selectedChat.id} • {isChatLocked ? '⚠️ Customer Wants to Buy' : 'Online'}</span>
+                  <span className="text-xs text-gray-500">
+                    +{selectedChat.id} • 
+                    {isEscalated ? <span className="text-red-600 font-bold ml-1">LOCKED (Needs Admin)</span> : ' Online'}
+                  </span>
                 </div>
               </div>
-              <div className="flex gap-4 md:gap-6 text-gray-500">
-                 <Search size={24} className="cursor-pointer hover:text-gray-600" />
-                 <MoreVertical size={24} className="cursor-pointer hover:text-gray-600" />
+
+              {/* ACTION BUTTONS */}
+              <div className="flex items-center gap-4">
+                 <button 
+                   onClick={toggleBot}
+                   className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-semibold transition-colors
+                     ${isBotActive 
+                       ? 'bg-green-100 text-green-700 hover:bg-green-200' 
+                       : 'bg-red-100 text-red-700 hover:bg-red-200'}
+                   `}
+                 >
+                   {isBotActive ? (
+                     <><Bot size={16} /> Bot Active</>
+                   ) : (
+                     <><Lock size={16} /> Bot Stopped</>
+                   )}
+                 </button>
+                 {!isBotActive && (
+                    <button onClick={toggleBot} className="text-sm underline text-blue-600 font-semibold">
+                        Resume Bot
+                    </button>
+                 )}
+                 <MoreVertical size={24} className="text-gray-500 cursor-pointer" />
               </div>
             </div>
 
@@ -235,12 +278,20 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
             <div className="flex-1 overflow-y-auto p-4 whatsapp-bg relative">
               <div className="flex flex-col gap-2">
                 
-                {/* Encryption Notice */}
+                {/* Status Banners */}
                 <div className="flex justify-center my-4">
-                  <div className="bg-[#fff5c4] text-xs text-gray-800 px-3 py-1.5 rounded-lg shadow-sm text-center max-w-xs">
-                     Messages synced from WhatsApp Business API.
+                  <div className="bg-[#fff5c4] text-xs text-gray-800 px-3 py-1.5 rounded-lg shadow-sm text-center">
+                     Messages synced via WhatsApp Business API.
                   </div>
                 </div>
+
+                {!isBotActive && (
+                    <div className="flex justify-center mb-4 sticky top-0 z-20">
+                        <div className="bg-red-100 border border-red-300 text-red-800 px-4 py-2 rounded-lg shadow-md flex items-center gap-2 text-sm font-bold animate-pulse">
+                            <Lock size={16} /> Bot is Locked. Admin Only.
+                        </div>
+                    </div>
+                )}
 
                 {/* Messages */}
                 {selectedChat.messages.map((msg, idx) => (
@@ -248,7 +299,6 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                     key={idx} 
                     className={`flex animate-fade-in ${msg.sender === 'user' ? 'justify-start' : 'justify-end'}`}
                   >
-                    {/* User = White (Incoming), Bot = Green (Outgoing) */}
                     <div 
                         className={`
                           max-w-[85%] md:max-w-[65%] rounded-lg px-2 relative shadow-sm text-sm
@@ -257,14 +307,14 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                             : 'bg-[#d9fdd3] rounded-tr-none'}
                         `}
                       >
-                         {/* Image Message */}
+                         {/* Image */}
                          {msg.type === 'image' && msg.image && (
                            <div className="p-1">
                               <img src={msg.image} alt="Media" className="rounded-lg w-full max-w-[300px] object-cover mb-1" />
                            </div>
                          )}
 
-                        {/* Text Message */}
+                        {/* Text */}
                         {msg.text && (
                           <div className="pt-2 pl-1 pr-1 pb-1 text-gray-900 whitespace-pre-wrap leading-relaxed break-words relative z-0">
                             {msg.text}
@@ -276,7 +326,6 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                         <div className="absolute bottom-1 right-2 flex items-center gap-1 z-10 h-4">
                           <span className="text-[11px] text-gray-500 min-w-[45px] text-right leading-none">
                             {formatTime(msg.timestamp)}
-                            {/* Simple checks for outgoing messages only */}
                             {msg.sender !== 'user' && <CheckCheck size={14} className="text-blue-500 ml-1 inline" />}
                           </span>
                         </div>
@@ -291,8 +340,8 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
             {/* Input Area */}
             <div className="h-auto min-h-[64px] bg-[#f0f2f5] px-4 py-2 flex items-center gap-2 z-10 flex-shrink-0">
                 <div className="flex gap-4">
-                  <Smile size={26} className="text-gray-500 cursor-pointer hover:text-gray-600" />
-                  <Paperclip size={24} className="text-gray-500 cursor-pointer hover:text-gray-600" />
+                  <Smile size={26} className="text-gray-500 cursor-pointer" />
+                  <Paperclip size={24} className="text-gray-500 cursor-pointer" />
                 </div>
                 
                 <div className="flex-1 bg-white rounded-lg flex items-center min-h-[40px] border border-white">
@@ -319,7 +368,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
             <h1 className="text-[#41525d] text-3xl font-light mb-4">JohnTech Dashboard</h1>
             <p className="text-[#8696a0] text-sm max-w-md text-center">
               View incoming customer queries here in real-time.<br/>
-              When a customer is ready to buy, the chat will be flagged red.
+              Chats turn <strong>Red</strong> when the bot locks due to buying intent.
             </p>
           </div>
         )}
