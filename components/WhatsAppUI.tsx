@@ -188,7 +188,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                 onClick={() => setSelectedChatId(chat.id)}
                 className={`flex items-center gap-3 p-3 cursor-pointer border-b border-gray-100 transition-colors relative
                   ${selectedChatId === chat.id ? 'bg-[#f0f2f5]' : 'hover:bg-[#f5f6f6]'}
-                  ${(chat.isEscalated || chat.botActive === false) ? 'bg-red-50 hover:bg-red-100' : ''}
+                  ${(chat.isEscalated || chat.botActive === false) ? 'bg-red-50 hover:bg-red-100 border-l-4 border-l-red-600' : ''}
                 `}
               >
                 <div className="w-12 h-12 rounded-full overflow-hidden flex-shrink-0 border border-gray-100 bg-gray-200 flex items-center justify-center relative">
@@ -235,7 +235,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
             {/* Chat Header */}
             <div className={`
               h-16 px-4 flex items-center justify-between border-b border-gray-200 z-30 flex-shrink-0 transition-colors
-              ${(!isBotActive || isEscalated) ? 'bg-red-100' : 'bg-[#f0f2f5]'}
+              ${(!isBotActive || isEscalated) ? 'bg-red-100 border-b-2 border-red-500' : 'bg-[#f0f2f5]'}
             `}>
               <div className="flex items-center gap-2 md:gap-4">
                 <button onClick={() => setSelectedChatId(null)} className="md:hidden text-gray-600 mr-1">
