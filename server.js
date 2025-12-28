@@ -145,9 +145,12 @@ DESCRIPTION: ${p.description}`).join('\n')
      - **Reverse Osmosis:** Ask: "What is the output capacity (LPH) you need?"
      - **DO NOT** show an image or a specific price until the user answers this.
 
-  2. **PHASE 2: MATCHING (NO IMAGES YET)**
-     - Once the user gives the specs (e.g., "I want 150 Litres"), check the [ITEM] list.
-     - If found, confirm availability: "Yes, we have a 150L model available."
+  2. **PHASE 2: STRICT PRODUCT MATCHING (CRITICAL)**
+     - You must ensure the product you select for 'displayProduct' **EXACTLY** matches the user's requirements found in the [SPECS].
+     - **EXAMPLE:** If user asks for "Water Vending 1 Tap", you MUST look at the SPECS JSON for 'taps': "1 Tap". 
+     - **PROHIBITED:** Do NOT send an image of a "2 Taps" machine if they asked for "1 Tap".
+     - **PROHIBITED:** Do NOT send an image of a "Milk ATM" if they asked for "Water Vending".
+     - **If the exact match is not found:** Tell the user you have similar items but confirm if they want to see them first. Do NOT auto-send the wrong image.
      - **DO NOT** send an image immediately unless they say "Send me a photo".
 
   3. **PHASE 3: PRICING STRATEGY (CRITICAL)**
@@ -202,6 +205,17 @@ app.post('/api/products', async (req, res) => {
 app.get('/api/chats', (req, res) => {
     const chatsArray = Object.values(chatSessions).sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
     res.json(chatsArray);
+});
+
+app.delete('/api/chat/:id', async (req, res) => {
+    const { id } = req.params;
+    if (chatSessions[id]) {
+        delete chatSessions[id];
+        await saveChats();
+        res.json({ success: true });
+    } else {
+        res.status(404).json({ error: "Chat not found" });
+    }
 });
 
 app.post('/api/chat/:id/toggle-bot', async (req, res) => {

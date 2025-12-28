@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Product, Message, ChatSession } from '../types';
 import { 
   MoreVertical, Search, Paperclip, Smile, 
-  Send, CheckCheck, CircleDashed, ArrowLeft, Lock, Unlock, Bot, X
+  Send, CheckCheck, CircleDashed, ArrowLeft, Lock, Unlock, Bot, X, Trash2
 } from 'lucide-react';
 
 interface WhatsAppUIProps {
@@ -142,6 +142,27 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
         }
     } catch (err) {
         console.error("Toggle failed", err);
+    }
+  };
+
+  const handleDeleteChat = async () => {
+    if (!selectedChatId) return;
+    if (!confirm("Are you sure you want to delete this conversation permanently? This action cannot be undone.")) return;
+
+    try {
+        const res = await fetch(`/api/chat/${selectedChatId}`, {
+            method: 'DELETE'
+        });
+
+        if (res.ok) {
+            setChatSessions(prev => prev.filter(c => c.id !== selectedChatId));
+            setSelectedChatId(null);
+        } else {
+            alert("Failed to delete chat.");
+        }
+    } catch (err) {
+        console.error("Delete failed", err);
+        alert("Error connecting to server.");
     }
   };
 
@@ -300,7 +321,14 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                         Resume Bot
                     </button>
                  )}
-                 <MoreVertical size={24} className="text-gray-500 cursor-pointer" />
+                 <div className="h-6 w-px bg-gray-300 mx-2"></div>
+                 <button 
+                   onClick={handleDeleteChat}
+                   className="text-gray-500 hover:text-red-600 transition-colors p-2 rounded-full hover:bg-red-50"
+                   title="Delete Chat"
+                 >
+                    <Trash2 size={22} />
+                 </button>
               </div>
             </div>
 
