@@ -11,6 +11,8 @@ const App: React.FC = () => {
   
   // Track loading state: 'init', 'success', 'error'
   const [loadStatus, setLoadStatus] = useState<'init' | 'success' | 'error'>('init');
+  // Track save state: 'idle', 'saving', 'saved', 'error'
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   // 1. Load products from Server on startup
   useEffect(() => {
@@ -56,15 +58,21 @@ const App: React.FC = () => {
   useEffect(() => {
     if (loadStatus === 'success') {
       const syncInventory = async () => {
+        setSaveStatus('saving');
         try {
-          await fetch('/api/products', {
+          const res = await fetch('/api/products', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ products })
           });
-          // Quiet sync
+          
+          if(!res.ok) throw new Error("Server rejected data");
+          
+          setSaveStatus('saved');
+          setTimeout(() => setSaveStatus('idle'), 2000);
         } catch (err) {
           console.error('Failed to sync inventory:', err);
+          setSaveStatus('error');
         }
       };
 
@@ -90,6 +98,13 @@ const App: React.FC = () => {
     <div className="h-screen bg-[#d1d7db] flex items-center justify-center relative overflow-hidden">
       <div className="absolute top-0 w-full h-32 bg-[#00a884] z-0"></div>
       
+      {/* Save Status Indicator */}
+      <div className="absolute top-4 right-4 z-50 pointer-events-none">
+         {saveStatus === 'saving' && <div className="bg-blue-600 text-white px-3 py-1 rounded-full text-xs shadow animate-pulse font-medium">Saving changes...</div>}
+         {saveStatus === 'saved' && <div className="bg-green-600 text-white px-3 py-1 rounded-full text-xs shadow font-medium">Saved</div>}
+         {saveStatus === 'error' && <div className="bg-red-600 text-white px-3 py-1 rounded-full text-xs shadow animate-bounce font-medium">Save Failed! Data too large.</div>}
+      </div>
+
       <div className="w-full h-full md:h-[95%] md:w-[95%] z-10 relative">
         <WhatsAppUI 
           products={products}

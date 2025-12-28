@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Product, ProductCategory } from '../types';
-import { X, Plus, Trash2, Upload, Pencil, Save, Ban, LayoutList, PlusCircle } from 'lucide-react';
+import { X, Plus, Trash2, Upload, Pencil, Save, Ban, LayoutList, PlusCircle, Loader2 } from 'lucide-react';
 
 interface ProductCatalogProps {
   isOpen: boolean;
@@ -29,25 +29,77 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [images, setImages] = useState<string[]>([]);
+  const [isCompressing, setIsCompressing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // COMPRESSION UTILITY
+  const compressImage = (file: File): Promise<string> => {
+      return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.readAsDataURL(file);
+          reader.onload = (event) => {
+              const img = new Image();
+              img.src = event.target?.result as string;
+              img.onload = () => {
+                  const canvas = document.createElement('canvas');
+                  const MAX_WIDTH = 1024;
+                  const MAX_HEIGHT = 1024;
+                  let width = img.width;
+                  let height = img.height;
+
+                  if (width > height) {
+                      if (width > MAX_WIDTH) {
+                          height *= MAX_WIDTH / width;
+                          width = MAX_WIDTH;
+                      }
+                  } else {
+                      if (height > MAX_HEIGHT) {
+                          width *= MAX_HEIGHT / height;
+                          height = MAX_HEIGHT;
+                      }
+                  }
+
+                  canvas.width = width;
+                  canvas.height = height;
+                  const ctx = canvas.getContext('2d');
+                  if (ctx) {
+                      ctx.drawImage(img, 0, 0, width, height);
+                      // Compress to JPEG at 0.7 quality
+                      resolve(canvas.toDataURL('image/jpeg', 0.7));
+                  } else {
+                      resolve(event.target?.result as string); // Fallback
+                  }
+              };
+          };
+      });
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       if (images.length + e.target.files.length > 5) {
         alert("You can only upload up to 5 images per product.");
         return;
       }
+      
+      setIsCompressing(true);
+      const fileList = Array.from(e.target.files) as File[];
+      const compressedImages: string[] = [];
 
-      Array.from(e.target.files).forEach(file => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          setImages(prev => [...prev, reader.result as string]);
-        };
-        // Fix for TypeScript error: cast file to Blob
-        reader.readAsDataURL(file as unknown as Blob);
-      });
+      for (const file of fileList) {
+          try {
+              const compressed = await compressImage(file);
+              compressedImages.push(compressed);
+          } catch (err) {
+              console.error("Compression failed for a file", err);
+          }
+      }
+
+      setImages(prev => [...prev, ...compressedImages]);
+      setIsCompressing(false);
+      // Reset input so same file can be selected again if needed
+      if(fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -330,10 +382,11 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
                 <div className="flex flex-wrap gap-2 mt-2">
                   <button 
                     onClick={() => fileInputRef.current?.click()}
-                    className="w-20 h-20 border-2 border-dashed border-gray-300 rounded flex flex-col items-center justify-center text-gray-500 hover:border-[#008069] hover:text-[#008069]"
+                    disabled={isCompressing}
+                    className="w-20 h-20 border-2 border-dashed border-gray-300 rounded flex flex-col items-center justify-center text-gray-500 hover:border-[#008069] hover:text-[#008069] disabled:opacity-50"
                   >
-                    <Upload size={20} />
-                    <span className="text-xs mt-1">Upload</span>
+                    {isCompressing ? <Loader2 size={20} className="animate-spin" /> : <Upload size={20} />}
+                    <span className="text-xs mt-1">{isCompressing ? '...' : 'Upload'}</span>
                   </button>
                   {images.map((img, idx) => (
                     <div key={idx} className="relative w-20 h-20 group">
@@ -351,10 +404,12 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
 
               <button 
                 onClick={handleSubmit}
+                disabled={isCompressing}
                 className={`w-full py-3 rounded-lg font-semibold transition-colors shadow-sm flex items-center justify-center gap-2
                   ${editingId 
                     ? 'bg-blue-600 hover:bg-blue-700 text-white' 
                     : 'bg-[#008069] hover:bg-[#006d59] text-white'}
+                  ${isCompressing ? 'opacity-50 cursor-not-allowed' : ''}
                 `}
               >
                 {editingId ? <><Save size={20} /> Update Product</> : <><Plus size={20} /> Add Product to Inventory</>}
