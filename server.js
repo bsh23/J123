@@ -92,7 +92,7 @@ const MODEL_NAME = 'gemini-3-flash-preview';
 // --- TOOLS ---
 const displayProductTool = {
   name: 'displayProduct',
-  description: 'Trigger the sending of product photos. ONLY use this when: 1. You have identified the EXACT product ID based on user specs (Capacity/Type). 2. The user explicitly asks to "see" the machine.',
+  description: 'Trigger the sending of product photos. RESTRICTIONS: 1. DO NOT use when answering questions about PRICE, LOCATION, or PAYMENT. 2. ONLY use when the user explicitly asks to "see" the machine, "send photos", or "share images".',
   parameters: {
     type: Type.OBJECT,
     properties: { productId: { type: Type.STRING, description: 'ID of the specific product' } },
@@ -139,25 +139,25 @@ DESCRIPTION: ${p.description}`).join('\n')
      - **Reverse Osmosis:** Ask: "What is the output capacity (LPH) you need?"
      - **DO NOT** show an image or a specific price until the user answers this.
 
-  2. **PHASE 2: MATCHING & PRESENTATION**
-     - Once the user gives the specs (e.g., "I want 150 Litres"), look at the [ITEM] list below.
-     - **IF MATCH FOUND:** 
-       - Say: "We have a 150L model available."
-       - Use 'displayProduct' tool to show it.
-       - Explain the key features from the DESCRIPTION.
-     - **IF NO MATCH:**
-       - Say: "We don't have a 150L in stock right now, but we can fabricate one for you. Or would you like to see our [Closest Size]?"
+  2. **PHASE 2: MATCHING (NO IMAGES YET)**
+     - Once the user gives the specs (e.g., "I want 150 Litres"), check the [ITEM] list.
+     - If found, confirm availability: "Yes, we have a 150L model available."
+     - **DO NOT** send an image immediately unless they say "Send me a photo".
 
-  3. **PHASE 3: ANSWERING QUESTIONS (TEXT ONLY)**
-     - If the user asks **"How much is it?"**:
-       - Reply with the Price Range in text.
-       - **DO NOT** use 'displayProduct'. Just give the price.
-     - If the user asks **"How does it work?"**:
-       - Explain the mechanism in simple layman's terms (e.g., "You key in the amount, and it pumps exactly that value...").
-       - **DO NOT** use 'displayProduct'. Explain with words first.
+  3. **PHASE 3: PRICING STRATEGY (CRITICAL)**
+     - **STANDARD QUOTE:** When asked for price, always quote the **MAXIMUM** (High End) price listed in the [ITEM] details.
+       - Example: If range is 30,000 - 32,000. Say: "It goes for KSh 32,000."
+       - **DO NOT** mention the range (e.g., "30k-32k").
+     - **NEGOTIATION:** Only reveal the **MINIMUM** price if the user says "Too expensive", "Best price?", or asks for a discount.
+       - Example: "For you, the best I can do is KSh 30,000."
+     - **DO NOT** use 'displayProduct' when answering price questions. Just give the text.
 
-  4. **PHASE 4: NEGOTIATION & CLOSING**
-     - You can negotiate prices downwards towards the 'Min' price listed.
+  4. **PHASE 4: ANSWERING GENERAL QUESTIONS**
+     - **Location/How it works:** Answer purely with text.
+     - **DO NOT** use 'displayProduct' when answering about location or operation.
+     - Explain the mechanism in simple layman's terms (benefits over specs).
+
+  5. **PHASE 5: CLOSING**
      - Only use 'escalateToAdmin' if they are ready to pay via M-Pesa or Bank.
 
   --- INVENTORY DATA ---
