@@ -451,7 +451,7 @@ app.post('/webhook', async (req, res) => {
     // Replace old images with text placeholders.
     const historyParts = chatSessions[senderPhone].messages
         .slice(0, -1) 
-        .slice(-10) // Small context window
+        .slice(-30) // INCREASED CONTEXT WINDOW FROM 10 TO 30
         .filter(m => m.text || m.type === 'image')
         .map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
@@ -467,7 +467,7 @@ app.post('/webhook', async (req, res) => {
       config: {
         systemInstruction: getSystemInstruction(productInventory),
         tools: [{ functionDeclarations: [displayProductTool, escalateToAdminTool] }],
-        maxOutputTokens: 800,
+        maxOutputTokens: 4096, // INCREASED FROM 800 TO 4096
         temperature: 0.7,
       },
       history: historyParts
