@@ -186,19 +186,24 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
               <div 
                 key={chat.id}
                 onClick={() => setSelectedChatId(chat.id)}
-                className={`flex items-center gap-3 p-3 cursor-pointer border-b border-gray-100 transition-colors
+                className={`flex items-center gap-3 p-3 cursor-pointer border-b border-gray-100 transition-colors relative
                   ${selectedChatId === chat.id ? 'bg-[#f0f2f5]' : 'hover:bg-[#f5f6f6]'}
+                  ${(chat.isEscalated || chat.botActive === false) ? 'bg-red-50 hover:bg-red-100' : ''}
                 `}
               >
                 <div className="w-12 h-12 rounded-full overflow-hidden flex-shrink-0 border border-gray-100 bg-gray-200 flex items-center justify-center relative">
                    <span className="text-gray-500 font-bold text-lg">{chat.contactName.charAt(0)}</span>
-                   {chat.isEscalated && (
-                     <div className="absolute bottom-0 right-0 w-3 h-3 bg-red-600 rounded-full border-2 border-white"></div>
+                   {(chat.isEscalated || chat.botActive === false) && (
+                     <div className="absolute bottom-0 right-0 w-4 h-4 bg-red-600 rounded-full border-2 border-white flex items-center justify-center">
+                         <Lock size={10} className="text-white" />
+                     </div>
                    )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-baseline">
-                    <h3 className="text-gray-900 font-medium truncate">{chat.contactName}</h3>
+                    <h3 className={`font-medium truncate ${chat.isEscalated ? 'text-red-700 font-bold' : 'text-gray-900'}`}>
+                        {chat.contactName}
+                    </h3>
                     <span className="text-xs text-gray-500">{formatTime(chat.lastMessageTime)}</span>
                   </div>
                   <div className="text-xs text-[#008069] font-medium mb-1">+{chat.id}</div>
@@ -206,8 +211,10 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                     <p className="text-sm text-gray-500 truncate flex items-center gap-1 max-w-[70%]">
                       {chat.messages[chat.messages.length-1]?.text}
                     </p>
-                    {chat.isEscalated && (
-                      <span className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold">Action</span>
+                    {(chat.isEscalated || chat.botActive === false) && (
+                      <span className="text-[10px] bg-red-600 text-white px-2 py-1 rounded-full font-bold shadow-sm animate-pulse">
+                        ACTION
+                      </span>
                     )}
                   </div>
                 </div>
@@ -219,7 +226,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
 
       {/* Main Chat Area */}
       <div className={`
-        flex-1 flex flex-col min-w-0 bg-[#efeae2] h-full
+        flex-1 flex flex-col min-w-0 bg-[#efeae2] h-full relative
         ${selectedChatId ? 'flex' : 'hidden md:flex'}
       `}>
         
@@ -227,8 +234,8 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
           <>
             {/* Chat Header */}
             <div className={`
-              h-16 px-4 flex items-center justify-between border-b border-gray-200 z-10 flex-shrink-0 transition-colors
-              ${isEscalated ? 'bg-red-50' : 'bg-[#f0f2f5]'}
+              h-16 px-4 flex items-center justify-between border-b border-gray-200 z-30 flex-shrink-0 transition-colors
+              ${(!isBotActive || isEscalated) ? 'bg-red-100' : 'bg-[#f0f2f5]'}
             `}>
               <div className="flex items-center gap-2 md:gap-4">
                 <button onClick={() => setSelectedChatId(null)} className="md:hidden text-gray-600 mr-1">
@@ -244,7 +251,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                   </span>
                   <span className="text-xs text-gray-500">
                     +{selectedChat.id} • 
-                    {isEscalated ? <span className="text-red-600 font-bold ml-1">LOCKED (Needs Admin)</span> : ' Online'}
+                    {isEscalated ? <span className="text-red-600 font-bold ml-1">NEEDS ADMIN</span> : ' Online'}
                   </span>
                 </div>
               </div>
@@ -256,23 +263,33 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-semibold transition-colors
                      ${isBotActive 
                        ? 'bg-green-100 text-green-700 hover:bg-green-200' 
-                       : 'bg-red-100 text-red-700 hover:bg-red-200'}
+                       : 'bg-red-600 text-white hover:bg-red-700 shadow-md'}
                    `}
                  >
                    {isBotActive ? (
                      <><Bot size={16} /> Bot Active</>
                    ) : (
-                     <><Lock size={16} /> Bot Stopped</>
+                     <><Lock size={16} /> LOCKED</>
                    )}
                  </button>
                  {!isBotActive && (
-                    <button onClick={toggleBot} className="text-sm underline text-blue-600 font-semibold">
+                    <button onClick={toggleBot} className="hidden md:block text-sm underline text-blue-600 font-semibold">
                         Resume Bot
                     </button>
                  )}
                  <MoreVertical size={24} className="text-gray-500 cursor-pointer" />
               </div>
             </div>
+
+            {/* Mobile LOCKED Banner - Highly Visible */}
+            {(!isBotActive || isEscalated) && (
+                <div className="bg-red-600 text-white p-3 text-center text-sm font-bold shadow-md z-20 flex justify-between items-center px-6 animate-pulse">
+                    <span className="flex items-center gap-2"><Lock size={16} /> ADMIN ACTION NEEDED</span>
+                    <button onClick={toggleBot} className="bg-white text-red-600 px-3 py-1 rounded-full text-xs uppercase">
+                        Unlock
+                    </button>
+                </div>
+            )}
 
             {/* Messages Area */}
             <div className="flex-1 overflow-y-auto p-4 whatsapp-bg relative">
@@ -284,14 +301,6 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                      Messages synced via WhatsApp Business API.
                   </div>
                 </div>
-
-                {!isBotActive && (
-                    <div className="flex justify-center mb-4 sticky top-0 z-20">
-                        <div className="bg-red-100 border border-red-300 text-red-800 px-4 py-2 rounded-lg shadow-md flex items-center gap-2 text-sm font-bold animate-pulse">
-                            <Lock size={16} /> Bot is Locked. Admin Only.
-                        </div>
-                    </div>
-                )}
 
                 {/* Messages */}
                 {selectedChat.messages.map((msg, idx) => (
@@ -348,7 +357,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                   <input
                     type="text"
                     className="w-full py-2 px-4 rounded-lg border-none focus:outline-none text-black placeholder-gray-500 bg-white"
-                    placeholder="Type a message..."
+                    placeholder={isBotActive ? "Type a message..." : "Bot Locked. Type to reply manually..."}
                     value={inputText}
                     onChange={(e) => setInputText(e.target.value)}
                     onKeyDown={handleKeyDown}

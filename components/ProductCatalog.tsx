@@ -1,18 +1,23 @@
 import React, { useState, useRef } from 'react';
 import { Product, ProductCategory } from '../types';
-import { X, Plus, Trash2, Image as ImageIcon, Upload, DollarSign } from 'lucide-react';
+import { X, Plus, Trash2, Upload, Pencil, Save, Ban, LayoutList, PlusCircle } from 'lucide-react';
 
 interface ProductCatalogProps {
   isOpen: boolean;
   onClose: () => void;
   products: Product[];
   onAddProduct: (product: Product) => void;
+  onUpdateProduct: (product: Product) => void;
   onRemoveProduct: (id: string) => void;
 }
 
-const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, products, onAddProduct, onRemoveProduct }) => {
+const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, products, onAddProduct, onUpdateProduct, onRemoveProduct }) => {
   const [activeCategory, setActiveCategory] = useState<ProductCategory>('Milk ATM');
   
+  // Edit Mode & UI State
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [mobileTab, setMobileTab] = useState<'form' | 'list'>('list'); // Default to list on mobile
+
   // Form States
   const [capacity, setCapacity] = useState('');
   const [material, setMaterial] = useState<'Stainless Steel' | 'Non-Stainless Steel'>('Stainless Steel');
@@ -51,6 +56,7 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
   };
 
   const resetForm = () => {
+    setEditingId(null);
     setCapacity('');
     setDescription('');
     setMinPrice('');
@@ -60,9 +66,33 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
     setOperationType('Automatic');
     setTaps('1 Tap');
     setMountType('Floor Standing');
+    // Keep category for convenience
   };
 
-  const handleAdd = () => {
+  const startEditing = (product: Product) => {
+    setEditingId(product.id);
+    setActiveCategory(product.category);
+    setDescription(product.description);
+    setMinPrice(product.priceRange.min.toString());
+    setMaxPrice(product.priceRange.max.toString());
+    setImages(product.images);
+
+    // Extract specs safely
+    const specs = product.specs;
+    if (specs.capacity) {
+        const cap = parseFloat(specs.capacity);
+        setCapacity(isNaN(cap) ? '' : cap.toString());
+    }
+    if (specs.material) setMaterial(specs.material);
+    if (specs.operationType) setOperationType(specs.operationType);
+    if (specs.taps) setTaps(specs.taps);
+    if (specs.mountType) setMountType(specs.mountType);
+
+    // Switch view on mobile
+    setMobileTab('form');
+  };
+
+  const handleSubmit = () => {
     // Validation
     if (!description.trim()) {
       alert("Description is mandatory.");
@@ -106,8 +136,8 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
         break;
     }
 
-    const newProduct: Product = {
-      id: Date.now().toString(),
+    const productData: Product = {
+      id: editingId || Date.now().toString(),
       category: activeCategory,
       name: generatedName,
       description,
@@ -119,9 +149,16 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
       specs: productSpecs
     };
 
-    onAddProduct(newProduct);
+    if (editingId) {
+        onUpdateProduct(productData);
+        alert("Product updated successfully!");
+    } else {
+        onAddProduct(productData);
+        alert("Product added successfully!");
+    }
+    
     resetForm();
-    alert("Product added successfully!");
+    setMobileTab('list'); // Go back to list on mobile
   };
 
   // Shared CSS classes for inputs
@@ -130,22 +167,52 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white w-full max-w-4xl h-[90vh] rounded-lg shadow-xl flex flex-col overflow-hidden animate-fade-in">
+      <div className="bg-white w-full max-w-5xl h-[90vh] rounded-lg shadow-xl flex flex-col overflow-hidden animate-fade-in">
         {/* Header */}
-        <div className="bg-[#008069] text-white p-4 flex justify-between items-center">
-          <h2 className="text-xl font-semibold">JohnTech Inventory Manager</h2>
+        <div className="bg-[#008069] text-white p-4 flex justify-between items-center shadow-md z-10">
+          <h2 className="text-xl font-semibold flex items-center gap-2">
+            Inventory Manager
+          </h2>
           <button onClick={onClose} className="p-1 hover:bg-white/20 rounded-full">
             <X size={24} />
           </button>
         </div>
 
-        <div className="flex flex-1 overflow-hidden">
+        {/* Mobile Tabs */}
+        <div className="md:hidden flex border-b border-gray-200 bg-gray-50">
+            <button 
+                onClick={() => setMobileTab('list')}
+                className={`flex-1 py-3 text-sm font-semibold flex items-center justify-center gap-2 ${mobileTab === 'list' ? 'bg-white text-[#008069] border-b-2 border-[#008069]' : 'text-gray-500'}`}
+            >
+                <LayoutList size={18} /> Inventory
+            </button>
+            <button 
+                onClick={() => { setMobileTab('form'); if(!editingId) resetForm(); }}
+                className={`flex-1 py-3 text-sm font-semibold flex items-center justify-center gap-2 ${mobileTab === 'form' ? 'bg-white text-[#008069] border-b-2 border-[#008069]' : 'text-gray-500'}`}
+            >
+                {editingId ? <Pencil size={18} /> : <PlusCircle size={18} />} 
+                {editingId ? 'Edit Item' : 'Add New'}
+            </button>
+        </div>
+
+        <div className="flex flex-1 overflow-hidden relative">
           
-          {/* Left Panel - Add Product Form */}
-          <div className="w-full md:w-1/2 p-6 overflow-y-auto border-r border-gray-200">
-            <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
-              <Plus size={20} className="text-[#008069]" /> Add New Product
-            </h3>
+          {/* Left Panel - Form */}
+          <div className={`
+            w-full md:w-5/12 p-6 overflow-y-auto border-r border-gray-200 bg-white absolute md:relative inset-0 z-10 transition-transform duration-300 md:translate-x-0
+            ${mobileTab === 'form' ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+          `}>
+            <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                {editingId ? <Pencil size={20} className="text-blue-600" /> : <Plus size={20} className="text-[#008069]" />} 
+                {editingId ? 'Edit Product' : 'Add New Product'}
+                </h3>
+                {editingId && (
+                    <button onClick={resetForm} className="text-xs text-red-500 hover:text-red-700 font-semibold flex items-center gap-1">
+                        <Ban size={14} /> Cancel Edit
+                    </button>
+                )}
+            </div>
 
             {/* Category Selector */}
             <div className="mb-4">
@@ -154,6 +221,7 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
                 value={activeCategory} 
                 onChange={(e) => setActiveCategory(e.target.value as ProductCategory)}
                 className={selectClass}
+                disabled={!!editingId} // Disable category switch when editing
               >
                 <option value="Milk ATM">Milk ATM</option>
                 <option value="Oil ATM">Oil ATM (Salad ATM)</option>
@@ -282,30 +350,43 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
               </div>
 
               <button 
-                onClick={handleAdd}
-                className="w-full bg-[#008069] text-white py-3 rounded-lg font-semibold hover:bg-[#006d59] transition-colors shadow-sm"
+                onClick={handleSubmit}
+                className={`w-full py-3 rounded-lg font-semibold transition-colors shadow-sm flex items-center justify-center gap-2
+                  ${editingId 
+                    ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                    : 'bg-[#008069] hover:bg-[#006d59] text-white'}
+                `}
               >
-                Add Product to Inventory
+                {editingId ? <><Save size={20} /> Update Product</> : <><Plus size={20} /> Add Product to Inventory</>}
               </button>
             </div>
           </div>
 
           {/* Right Panel - Product List */}
-          <div className="hidden md:block w-1/2 p-6 overflow-y-auto bg-gray-50">
-            <h3 className="font-semibold text-gray-700 mb-4">Current Stock ({products.length})</h3>
-            <div className="space-y-4">
+          <div className={`
+            w-full md:w-7/12 p-6 overflow-y-auto bg-gray-50 absolute md:relative inset-0 z-0 transition-transform duration-300 md:translate-x-0
+            ${mobileTab === 'list' ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
+          `}>
+            <div className="flex justify-between items-center mb-4">
+               <h3 className="font-semibold text-gray-700">Current Inventory ({products.length})</h3>
+               <button onClick={() => setMobileTab('form')} className="md:hidden text-[#008069] font-bold text-sm">
+                 + Add New
+               </button>
+            </div>
+            
+            <div className="space-y-4 pb-20 md:pb-0">
               {products.map(product => (
-                <div key={product.id} className="bg-white p-4 rounded-lg shadow-sm border border-gray-100 flex gap-4 items-start">
+                <div key={product.id} className={`bg-white p-4 rounded-lg shadow-sm border flex gap-4 items-start ${editingId === product.id ? 'border-blue-500 ring-1 ring-blue-500' : 'border-gray-100'}`}>
                   <img 
                     src={product.images[0]} 
                     alt={product.name} 
                     className="w-20 h-20 object-cover rounded-md bg-gray-100 border"
                   />
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <span className="text-xs font-bold text-[#008069] uppercase tracking-wide">{product.category}</span>
-                    <h4 className="font-bold text-gray-800 text-sm">{product.name}</h4>
+                    <h4 className="font-bold text-gray-800 text-sm truncate">{product.name}</h4>
                     <p className="text-gray-600 font-medium text-sm mt-1">
-                      KSh {product.priceRange.min.toLocaleString()} - KSh {product.priceRange.max.toLocaleString()}
+                      KSh {product.priceRange.min.toLocaleString()} - {product.priceRange.max.toLocaleString()}
                     </p>
                     <div className="text-xs text-gray-500 mt-2 flex flex-wrap gap-2">
                       {Object.entries(product.specs).map(([key, val]) => (
@@ -315,17 +396,38 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
                       ))}
                     </div>
                   </div>
-                  <button 
-                    onClick={() => onRemoveProduct(product.id)}
-                    className="text-red-400 hover:text-red-600 p-2"
-                  >
-                    <Trash2 size={20} />
-                  </button>
+                  <div className="flex flex-col gap-2">
+                      <button 
+                        onClick={() => startEditing(product)}
+                        className="text-blue-500 hover:text-blue-700 p-2 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                        title="Edit Product"
+                      >
+                        <Pencil size={18} />
+                      </button>
+                      <button 
+                        onClick={() => {
+                            if(confirm('Are you sure you want to delete this product?')) {
+                                onRemoveProduct(product.id);
+                                if(editingId === product.id) resetForm();
+                            }
+                        }}
+                        className="text-red-400 hover:text-red-600 p-2 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
+                        title="Delete Product"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                  </div>
                 </div>
               ))}
               {products.length === 0 && (
-                <div className="text-center py-10 text-gray-400">
+                <div className="text-center py-20 text-gray-400">
+                  <div className="w-16 h-16 bg-gray-200 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <LayoutList size={32} />
+                  </div>
                   <p>No products in inventory.</p>
+                  <button onClick={() => setMobileTab('form')} className="mt-4 text-[#008069] font-semibold md:hidden">
+                    Add your first product
+                  </button>
                 </div>
               )}
             </div>

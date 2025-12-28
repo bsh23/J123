@@ -78,6 +78,10 @@ const App: React.FC = () => {
     setProducts(prev => [...prev, product]);
   };
 
+  const handleUpdateProduct = (updatedProduct: Product) => {
+    setProducts(prev => prev.map(p => p.id === updatedProduct.id ? updatedProduct : p));
+  };
+
   const handleRemoveProduct = (id: string) => {
     setProducts(prev => prev.filter(p => p.id !== id));
   };
@@ -99,6 +103,7 @@ const App: React.FC = () => {
         onClose={() => setIsCatalogOpen(false)}
         products={products}
         onAddProduct={handleAddProduct}
+        onUpdateProduct={handleUpdateProduct}
         onRemoveProduct={handleRemoveProduct}
       />
 
