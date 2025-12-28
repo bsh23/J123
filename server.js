@@ -19,6 +19,12 @@ const DOMAIN = 'https://whatsapp.johntechvendorsltd.co.ke';
 const DATA_FILE = path.join(__dirname, 'inventory.json');
 const CHATS_FILE = path.join(__dirname, 'chats.json');
 const CONFIG_FILE = path.join(__dirname, 'server-config.json');
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+
+// Ensure uploads directory exists
+if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
 
 // --- STATE MANAGEMENT ---
 let productInventory = [];
@@ -172,6 +178,9 @@ function formatResponseText(text) {
 // --- ROUTES ---
 app.get('/health', (req, res) => res.status(200).send('OK'));
 
+// Serve uploads folder statically
+app.use('/uploads', express.static(UPLOADS_DIR));
+
 // Serve static files if they exist
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) {
@@ -207,9 +216,34 @@ app.post('/api/chat/:id/toggle-bot', async (req, res) => {
 });
 
 app.post('/api/send-message', async (req, res) => {
-    const { to, text } = req.body;
+    const { to, text, image } = req.body;
     try {
-        await sendWhatsApp(to, { type: 'text', text: { body: text } }, true);
+        if (image) {
+            // Handle Image Upload
+            const matches = image.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+            if (!matches || matches.length !== 3) {
+                return res.status(400).json({ error: 'Invalid image format' });
+            }
+            const mimeType = matches[1];
+            const base64Data = matches[2];
+            const buffer = Buffer.from(base64Data, 'base64');
+            const ext = mimeType.split('/')[1] || 'png';
+            const filename = `admin_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
+            const filePath = path.join(UPLOADS_DIR, filename);
+
+            await writeFile(filePath, buffer);
+
+            const publicUrl = `${DOMAIN}/uploads/${filename}`;
+            console.log(`📤 Sending Image: ${publicUrl}`);
+
+            await sendWhatsApp(to, { 
+                type: 'image', 
+                image: { link: publicUrl, caption: text || '' } 
+            }, true);
+        } else {
+            // Text Only
+            await sendWhatsApp(to, { type: 'text', text: { body: text } }, true);
+        }
         res.json({ success: true });
     } catch (err) {
         console.error("Admin Reply Error:", err);
@@ -306,7 +340,7 @@ async function sendWhatsApp(to, payload, isAdmin = false) {
         sender: 'bot',
         timestamp: new Date(),
         type: payload.type,
-        text: payload.type === 'text' ? payload.text.body : 'Sent Image'
+        text: payload.type === 'text' ? payload.text.body : (payload.image.caption || 'Sent Image')
     };
     if (payload.type === 'image') storageMsg.image = payload.image.link; 
 

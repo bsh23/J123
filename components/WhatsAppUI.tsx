@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Product, Message, ChatSession } from '../types';
 import { 
   MoreVertical, Search, Paperclip, Smile, 
-  Send, CheckCheck, CircleDashed, ArrowLeft, Lock, Unlock, Bot
+  Send, CheckCheck, CircleDashed, ArrowLeft, Lock, Unlock, Bot, X
 } from 'lucide-react';
 
 interface WhatsAppUIProps {
@@ -16,8 +16,10 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [attachedImage, setAttachedImage] = useState<string | null>(null);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // --- POLLING ---
   useEffect(() => {
@@ -52,37 +54,58 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
     }
   }, [selectedChatId, chatSessions]);
 
-  const handleSendMessage = async (text: string) => {
-    if (!text.trim() || !selectedChatId) return;
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        if (ev.target?.result) setAttachedImage(ev.target.result as string);
+      };
+      reader.readAsDataURL(e.target.files[0]);
+    }
+  };
+
+  const clearAttachment = () => {
+    setAttachedImage(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleSendMessage = async () => {
+    if ((!inputText.trim() && !attachedImage) || !selectedChatId) return;
     
     setIsSending(true);
+    const textToSend = inputText.trim();
+    const imageToSend = attachedImage;
+
     try {
         const res = await fetch('/api/send-message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 to: selectedChatId,
-                text: text.trim()
+                text: textToSend,
+                image: imageToSend
             })
         });
 
         if (res.ok) {
             setInputText('');
+            clearAttachment();
+            
             // Optimistic update
             setChatSessions(prev => prev.map(c => {
                 if (c.id === selectedChatId) {
+                    const newMsg: any = { 
+                        id: Date.now().toString(), 
+                        text: textToSend, 
+                        sender: 'bot', 
+                        type: imageToSend ? 'image' : 'text', 
+                        timestamp: new Date() 
+                    };
+                    if (imageToSend) newMsg.image = imageToSend;
+
                     return {
                         ...c,
-                        messages: [
-                            ...c.messages, 
-                            { 
-                                id: Date.now().toString(), 
-                                text: text.trim(), 
-                                sender: 'bot', 
-                                type: 'text', 
-                                timestamp: new Date() 
-                            }
-                        ]
+                        messages: [...c.messages, newMsg]
                     };
                 }
                 return c;
@@ -123,7 +146,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') handleSendMessage(inputText);
+    if (e.key === 'Enter') handleSendMessage();
   };
 
   const formatTime = (dateInput: Date | string) => {
@@ -209,7 +232,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                   <div className="text-xs text-[#008069] font-medium mb-1">+{chat.id}</div>
                   <div className="flex items-center justify-between">
                     <p className="text-sm text-gray-500 truncate flex items-center gap-1 max-w-[70%]">
-                      {chat.messages[chat.messages.length-1]?.text}
+                      {chat.messages[chat.messages.length-1]?.text || 'Photo'}
                     </p>
                     {(chat.isEscalated || chat.botActive === false) && (
                       <span className="text-[10px] bg-red-600 text-white px-2 py-1 rounded-full font-bold shadow-sm animate-pulse">
@@ -347,27 +370,52 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
             </div>
 
             {/* Input Area */}
-            <div className="h-auto min-h-[64px] bg-[#f0f2f5] px-4 py-2 flex items-center gap-2 z-10 flex-shrink-0">
-                <div className="flex gap-4">
-                  <Smile size={26} className="text-gray-500 cursor-pointer" />
-                  <Paperclip size={24} className="text-gray-500 cursor-pointer" />
-                </div>
-                
-                <div className="flex-1 bg-white rounded-lg flex items-center min-h-[40px] border border-white">
-                  <input
-                    type="text"
-                    className="w-full py-2 px-4 rounded-lg border-none focus:outline-none text-black placeholder-gray-500 bg-white"
-                    placeholder={isBotActive ? "Type a message..." : "Bot Locked. Type to reply manually..."}
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    disabled={isSending}
-                  />
-                </div>
-                <div className="">
-                    <button onClick={() => handleSendMessage(inputText)} disabled={isSending} className={`p-2 ${isSending ? 'text-gray-400' : 'text-[#008069]'}`}>
-                        <Send size={24} />
+            <div className="h-auto min-h-[64px] bg-[#f0f2f5] px-4 py-2 flex flex-col z-10 flex-shrink-0">
+                {/* Image Preview */}
+                {attachedImage && (
+                  <div className="bg-white p-2 mb-2 rounded-lg shadow-sm border border-gray-200 flex items-center gap-4 self-start relative animate-fade-in">
+                    <img src={attachedImage} alt="Attachment" className="h-16 w-16 object-cover rounded" />
+                    <span className="text-xs text-gray-500 font-medium">Image attached</span>
+                    <button 
+                      onClick={clearAttachment}
+                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5 shadow hover:bg-red-600"
+                    >
+                      <X size={14} />
                     </button>
+                  </div>
+                )}
+                
+                <div className="flex items-center gap-2 w-full">
+                  <div className="flex gap-4">
+                    <Smile size={26} className="text-gray-500 cursor-pointer" />
+                    <button onClick={() => fileInputRef.current?.click()}>
+                        <Paperclip size={24} className={`cursor-pointer ${attachedImage ? 'text-[#008069]' : 'text-gray-500'}`} />
+                    </button>
+                    <input 
+                      type="file" 
+                      ref={fileInputRef} 
+                      className="hidden" 
+                      accept="image/*" 
+                      onChange={handleFileSelect} 
+                    />
+                  </div>
+                  
+                  <div className="flex-1 bg-white rounded-lg flex items-center min-h-[40px] border border-white">
+                    <input
+                      type="text"
+                      className="w-full py-2 px-4 rounded-lg border-none focus:outline-none text-black placeholder-gray-500 bg-white"
+                      placeholder={isBotActive ? (attachedImage ? "Add a caption..." : "Type a message...") : "Bot Locked. Type to reply manually..."}
+                      value={inputText}
+                      onChange={(e) => setInputText(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      disabled={isSending}
+                    />
+                  </div>
+                  <div className="">
+                      <button onClick={handleSendMessage} disabled={isSending} className={`p-2 ${isSending ? 'text-gray-400' : 'text-[#008069]'}`}>
+                          <Send size={24} />
+                      </button>
+                  </div>
                 </div>
             </div>
           </>
