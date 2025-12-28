@@ -6,9 +6,9 @@ interface ProductCatalogProps {
   isOpen: boolean;
   onClose: () => void;
   products: Product[];
-  onAddProduct: (product: Product) => void;
-  onUpdateProduct: (product: Product) => void;
-  onRemoveProduct: (id: string) => void;
+  onAddProduct: (product: Product) => Promise<boolean>;
+  onUpdateProduct: (product: Product) => Promise<boolean>;
+  onRemoveProduct: (id: string) => Promise<boolean>;
 }
 
 const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, products, onAddProduct, onUpdateProduct, onRemoveProduct }) => {
@@ -30,11 +30,12 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
   const [maxPrice, setMaxPrice] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [isCompressing, setIsCompressing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
-  // COMPRESSION UTILITY
+  // COMPRESSION UTILITY (High Quality)
   const compressImage = (file: File): Promise<string> => {
       return new Promise((resolve) => {
           const reader = new FileReader();
@@ -44,8 +45,9 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
               img.src = event.target?.result as string;
               img.onload = () => {
                   const canvas = document.createElement('canvas');
-                  const MAX_WIDTH = 1024;
-                  const MAX_HEIGHT = 1024;
+                  // HIGH QUALITY SETTINGS: 2500px allows for crystal clear images on mobile
+                  const MAX_WIDTH = 2500;
+                  const MAX_HEIGHT = 2500;
                   let width = img.width;
                   let height = img.height;
 
@@ -66,8 +68,8 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
                   const ctx = canvas.getContext('2d');
                   if (ctx) {
                       ctx.drawImage(img, 0, 0, width, height);
-                      // Compress to JPEG at 0.7 quality
-                      resolve(canvas.toDataURL('image/jpeg', 0.7));
+                      // 0.95 Quality = Virtually lossless to the human eye, but standardizes format to JPEG
+                      resolve(canvas.toDataURL('image/jpeg', 0.95));
                   } else {
                       resolve(event.target?.result as string); // Fallback
                   }
@@ -144,7 +146,7 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
     setMobileTab('form');
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     // Validation
     if (!description.trim()) {
       alert("Description is mandatory.");
@@ -201,16 +203,22 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
       specs: productSpecs
     };
 
+    setIsSaving(true);
+    let success = false;
+
     if (editingId) {
-        onUpdateProduct(productData);
-        alert("Product updated successfully!");
+        success = await onUpdateProduct(productData);
+        if (success) alert("Product updated successfully!");
     } else {
-        onAddProduct(productData);
-        alert("Product added successfully!");
+        success = await onAddProduct(productData);
+        if (success) alert("Product added successfully!");
     }
+    setIsSaving(false);
     
-    resetForm();
-    setMobileTab('list'); // Go back to list on mobile
+    if (success) {
+        resetForm();
+        setMobileTab('list'); 
+    }
   };
 
   // Shared CSS classes for inputs
@@ -382,7 +390,7 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
                 <div className="flex flex-wrap gap-2 mt-2">
                   <button 
                     onClick={() => fileInputRef.current?.click()}
-                    disabled={isCompressing}
+                    disabled={isCompressing || isSaving}
                     className="w-20 h-20 border-2 border-dashed border-gray-300 rounded flex flex-col items-center justify-center text-gray-500 hover:border-[#008069] hover:text-[#008069] disabled:opacity-50"
                   >
                     {isCompressing ? <Loader2 size={20} className="animate-spin" /> : <Upload size={20} />}
@@ -393,6 +401,7 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
                       <img src={img} alt="Product" className="w-full h-full object-cover rounded border border-gray-200" />
                       <button 
                         onClick={() => removeImage(idx)}
+                        disabled={isSaving}
                         className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
                       >
                         <X size={12} />
@@ -404,15 +413,16 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
 
               <button 
                 onClick={handleSubmit}
-                disabled={isCompressing}
+                disabled={isCompressing || isSaving}
                 className={`w-full py-3 rounded-lg font-semibold transition-colors shadow-sm flex items-center justify-center gap-2
                   ${editingId 
                     ? 'bg-blue-600 hover:bg-blue-700 text-white' 
                     : 'bg-[#008069] hover:bg-[#006d59] text-white'}
-                  ${isCompressing ? 'opacity-50 cursor-not-allowed' : ''}
+                  ${(isCompressing || isSaving) ? 'opacity-50 cursor-not-allowed' : ''}
                 `}
               >
-                {editingId ? <><Save size={20} /> Update Product</> : <><Plus size={20} /> Add Product to Inventory</>}
+                {isSaving ? <Loader2 size={20} className="animate-spin" /> : (editingId ? <Save size={20} /> : <Plus size={20} />)}
+                {isSaving ? 'Saving to Server...' : (editingId ? 'Update Product' : 'Add Product to Inventory')}
               </button>
             </div>
           </div>
@@ -454,18 +464,22 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
                   <div className="flex flex-col gap-2">
                       <button 
                         onClick={() => startEditing(product)}
+                        disabled={isSaving}
                         className="text-blue-500 hover:text-blue-700 p-2 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
                         title="Edit Product"
                       >
                         <Pencil size={18} />
                       </button>
                       <button 
-                        onClick={() => {
+                        onClick={async () => {
                             if(confirm('Are you sure you want to delete this product?')) {
-                                onRemoveProduct(product.id);
-                                if(editingId === product.id) resetForm();
+                                setIsSaving(true);
+                                const success = await onRemoveProduct(product.id);
+                                setIsSaving(false);
+                                if(success && editingId === product.id) resetForm();
                             }
                         }}
+                        disabled={isSaving}
                         className="text-red-400 hover:text-red-600 p-2 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
                         title="Delete Product"
                       >

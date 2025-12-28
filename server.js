@@ -194,6 +194,8 @@ if (fs.existsSync(distPath)) {
 }
 
 app.get('/api/products', (req, res) => res.json(productInventory || []));
+
+// BULK UPDATE (Legacy/Sync)
 app.post('/api/products', async (req, res) => {
   const { products } = req.body;
   if (Array.isArray(products)) {
@@ -201,6 +203,63 @@ app.post('/api/products', async (req, res) => {
     await saveInventory();
     res.json({ status: 'success' });
   } else { res.status(400).json({ status: 'error' }); }
+});
+
+// SINGLE CREATE
+app.post('/api/product', async (req, res) => {
+    try {
+        const product = req.body;
+        if (!product || !product.id) return res.status(400).json({ error: "Invalid product data" });
+        
+        productInventory.push(product);
+        await saveInventory();
+        console.log(`✅ Product Added: ${product.name}`);
+        res.json({ success: true });
+    } catch (err) {
+        console.error("Add Product Error:", err);
+        res.status(500).json({ error: "Failed to save product" });
+    }
+});
+
+// SINGLE UPDATE
+app.put('/api/product/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updatedProduct = req.body;
+        const index = productInventory.findIndex(p => p.id === id);
+        
+        if (index !== -1) {
+            productInventory[index] = updatedProduct;
+            await saveInventory();
+            console.log(`✅ Product Updated: ${updatedProduct.name}`);
+            res.json({ success: true });
+        } else {
+            res.status(404).json({ error: "Product not found" });
+        }
+    } catch (err) {
+        console.error("Update Product Error:", err);
+        res.status(500).json({ error: "Failed to update product" });
+    }
+});
+
+// SINGLE DELETE
+app.delete('/api/product/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const initialLength = productInventory.length;
+        productInventory = productInventory.filter(p => p.id !== id);
+        
+        if (productInventory.length < initialLength) {
+            await saveInventory();
+            console.log(`🗑️ Product Deleted: ${id}`);
+            res.json({ success: true });
+        } else {
+            res.status(404).json({ error: "Product not found" });
+        }
+    } catch (err) {
+        console.error("Delete Product Error:", err);
+        res.status(500).json({ error: "Failed to delete product" });
+    }
 });
 
 app.get('/api/chats', (req, res) => {
