@@ -1,4 +1,14 @@
-export type ProductCategory = 'Milk ATM' | 'Oil ATM' | 'Water Vending' | 'Reverse Osmosis';
+
+export type ProductCategory = 
+  | 'Milk ATM' 
+  | 'Oil ATM' 
+  | 'Water Vending' 
+  | 'Reverse Osmosis' 
+  | 'Milk Pasteurizer' 
+  | 'Bottle Rinser' 
+  | 'Packaging Table' 
+  | 'Cold Water Vending' 
+  | 'Ultra Filtration';
 
 export interface Product {
   id: string;
@@ -11,11 +21,12 @@ export interface Product {
   description: string;
   images: string[]; // Base64 strings
   specs: {
-    capacity?: string; // Milk, Oil, RO
-    material?: 'Stainless Steel' | 'Non-Stainless Steel'; // Oil
+    capacity?: string; // Milk, Oil, RO, Pasteurizer, UF, Bottle Rinser
+    material?: 'Stainless Steel' | 'Non-Stainless Steel'; // Oil, Packaging Table
     operationType?: 'Automatic' | 'Manual'; // Water
-    taps?: '1 Tap' | '2 Taps'; // Water
+    taps?: '1 Tap' | '2 Taps'; // Water, Cold Water
     mountType?: 'Floor Standing' | 'Wall Mount'; // Water
+    dimensions?: string; // Packaging Table
     [key: string]: any;
   };
 }

@@ -24,6 +24,7 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
   const [operationType, setOperationType] = useState<'Automatic' | 'Manual'>('Automatic');
   const [taps, setTaps] = useState<'1 Tap' | '2 Taps'>('1 Tap');
   const [mountType, setMountType] = useState<'Floor Standing' | 'Wall Mount'>('Floor Standing');
+  // Re-using capacity state for generic inputs where possible, but adding specific logic in render
   
   const [description, setDescription] = useState('');
   const [minPrice, setMinPrice] = useState('');
@@ -137,6 +138,9 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
         const cap = parseFloat(specs.capacity);
         setCapacity(isNaN(cap) ? '' : cap.toString());
     }
+    // Handle specific string capacities if they aren't just numbers
+    if (product.category === 'Bottle Rinser' && specs.capacity) setCapacity(specs.capacity.replace(' Bottles/Hour', ''));
+    
     if (specs.material) setMaterial(specs.material);
     if (specs.operationType) setOperationType(specs.operationType);
     if (specs.taps) setTaps(specs.taps);
@@ -172,6 +176,12 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
         generatedName = `Milk ATM - ${capacity}L (Automatic)`;
         break;
 
+      case 'Milk Pasteurizer':
+        if (!capacity) { alert("Capacity is required for Milk Pasteurizer"); return; }
+        productSpecs = { capacity: `${capacity} Litres` };
+        generatedName = `Milk Pasteurizer - ${capacity} Litres`;
+        break;
+
       case 'Oil ATM':
         if (!capacity) { alert("Capacity is required for Oil ATM"); return; }
         productSpecs = { capacity: `${capacity} Litres`, material };
@@ -183,11 +193,33 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
         generatedName = `Water Vending - ${taps}, ${operationType} (${mountType})`;
         break;
 
+      case 'Cold Water Vending':
+        productSpecs = { taps };
+        generatedName = `Cold Water Vending - ${taps} (Refrigerated)`;
+        break;
+
       case 'Reverse Osmosis':
         if (!capacity) { alert("Capacity (LPH) is required"); return; }
         productSpecs = { capacity: `${capacity} LPH` };
         generatedName = `Reverse Osmosis System - ${capacity} LPH`;
         break;
+
+      case 'Ultra Filtration':
+        if (!capacity) { alert("Capacity (LPH) is required"); return; }
+        productSpecs = { capacity: `${capacity} LPH` };
+        generatedName = `Ultra Filtration Machine - ${capacity} LPH`;
+        break;
+
+      case 'Bottle Rinser':
+         // Optional capacity
+         productSpecs = { capacity: capacity ? `${capacity} Bottles/Hour` : 'Standard' };
+         generatedName = capacity ? `Bottle Rinser - ${capacity} Bph` : `Bottle Rinser (Standard)`;
+         break;
+
+      case 'Packaging Table':
+         productSpecs = { material: 'Stainless Steel' };
+         generatedName = `Packaging Table (Stainless Steel)`;
+         break;
     }
 
     const productData: Product = {
@@ -284,9 +316,14 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
                 disabled={!!editingId} // Disable category switch when editing
               >
                 <option value="Milk ATM">Milk ATM</option>
+                <option value="Milk Pasteurizer">Milk Pasteurizer</option>
                 <option value="Oil ATM">Oil ATM (Salad ATM)</option>
-                <option value="Water Vending">Water Vending</option>
+                <option value="Water Vending">Water Vending (Standard)</option>
+                <option value="Cold Water Vending">Cold Water Vending</option>
                 <option value="Reverse Osmosis">Reverse Osmosis</option>
+                <option value="Ultra Filtration">Ultra Filtration</option>
+                <option value="Bottle Rinser">Bottle Rinser</option>
+                <option value="Packaging Table">Packaging Table</option>
               </select>
             </div>
 
@@ -297,6 +334,13 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
                    <label className="block text-sm font-medium text-gray-700 mb-1">Capacity (Litres)</label>
                    <input type="number" value={capacity} onChange={e => setCapacity(e.target.value)} className={`${inputClass} mb-2`} placeholder="e.g. 100" />
                    <p className="text-xs text-gray-500">* System is Automatic by default.</p>
+                </div>
+              )}
+
+              {activeCategory === 'Milk Pasteurizer' && (
+                <div>
+                   <label className="block text-sm font-medium text-gray-700 mb-1">Capacity (Litres)</label>
+                   <input type="number" value={capacity} onChange={e => setCapacity(e.target.value)} className={`${inputClass} mb-2`} placeholder="e.g. 200" />
                 </div>
               )}
 
@@ -342,10 +386,45 @@ const ProductCatalog: React.FC<ProductCatalogProps> = ({ isOpen, onClose, produc
                 </div>
               )}
 
+              {activeCategory === 'Cold Water Vending' && (
+                <div className="flex flex-col gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Taps</label>
+                    <select value={taps} onChange={(e: any) => setTaps(e.target.value)} className={selectClass}>
+                        <option value="1 Tap">1 Tap</option>
+                        <option value="2 Taps">2 Taps</option>
+                    </select>
+                  </div>
+                  <p className="text-xs text-gray-500">* System includes refrigeration unit.</p>
+                </div>
+              )}
+
               {activeCategory === 'Reverse Osmosis' && (
                  <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Capacity (Litres Per Hour)</label>
                     <input type="number" value={capacity} onChange={e => setCapacity(e.target.value)} className={inputClass} placeholder="e.g. 250" />
+                 </div>
+              )}
+
+              {activeCategory === 'Ultra Filtration' && (
+                 <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Capacity (Litres Per Hour)</label>
+                    <input type="number" value={capacity} onChange={e => setCapacity(e.target.value)} className={inputClass} placeholder="e.g. 500" />
+                 </div>
+              )}
+
+              {activeCategory === 'Bottle Rinser' && (
+                 <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Capacity (Bottles/Hour) - Optional</label>
+                    <input type="number" value={capacity} onChange={e => setCapacity(e.target.value)} className={inputClass} placeholder="e.g. 1000" />
+                 </div>
+              )}
+              
+              {activeCategory === 'Packaging Table' && (
+                 <div>
+                    <p className="text-sm text-gray-700 bg-blue-50 p-2 rounded border border-blue-100">
+                        Default: Stainless Steel Construction. Please specify dimensions in description.
+                    </p>
                  </div>
               )}
             </div>
