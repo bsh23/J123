@@ -144,6 +144,7 @@ DESCRIPTION: ${p.description}`).join('\n')
      - **Milk/Oil ATMs:** Ask: "What capacity (Litres) are you looking for? We have sizes like 100L, 200L, etc."
      - **Water Vending:** Ask: "Do you need Automatic or Manual? How many taps?"
      - **Reverse Osmosis:** Ask: "What is the output capacity (LPH) you need?"
+     - **Milk Pasteurizers/Bottle Rinsers:** Ask for capacity/speed.
      - **DO NOT** show an image or a specific price until the user answers this.
 
   2. **PHASE 2: STRICT PRODUCT MATCHING (CRITICAL)**
@@ -541,7 +542,7 @@ app.post('/webhook', async (req, res) => {
       config: {
         systemInstruction: getSystemInstruction(productInventory),
         tools: [{ functionDeclarations: [displayProductTool, escalateToAdminTool] }],
-        maxOutputTokens: 4096, // INCREASED FROM 800 TO 4096
+        maxOutputTokens: 4096, 
         temperature: 0.7,
       },
       history: historyParts
@@ -549,9 +550,20 @@ app.post('/webhook', async (req, res) => {
 
     const result = await chat.sendMessage({ message: { parts: geminiParts } });
 
-    // API Handling using getters
-    let textResponse = result.text;
-    const functionCalls = result.functionCalls; 
+    // --- MANUAL RESPONSE EXTRACTION TO AVOID SDK WARNINGS ---
+    const responseCandidate = result.response.candidates?.[0];
+    const contentParts = responseCandidate?.content?.parts || [];
+    
+    // Extract Text
+    let textResponse = contentParts
+      .filter(part => part.text)
+      .map(part => part.text)
+      .join('');
+
+    // Extract Function Calls
+    const functionCalls = contentParts
+      .filter(part => part.functionCall)
+      .map(part => part.functionCall);
 
     let imagesToSend = [];
     let shouldSilentLock = false;
@@ -592,7 +604,12 @@ app.post('/webhook', async (req, res) => {
     }
 
   } catch (err) {
-    console.error('❌ ERROR:', err.message);
+    // Better Error Logging
+    if (err.response) {
+       console.error('❌ GOOGLE API ERROR:', JSON.stringify(err.response.data, null, 2));
+    } else {
+       console.error('❌ ERROR:', err.message);
+    }
   }
 });
 
