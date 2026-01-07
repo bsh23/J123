@@ -551,7 +551,8 @@ app.post('/webhook', async (req, res) => {
     const result = await chat.sendMessage({ message: { parts: geminiParts } });
 
     // --- MANUAL RESPONSE EXTRACTION TO AVOID SDK WARNINGS ---
-    const responseCandidate = result.response.candidates?.[0];
+    // Note: In @google/genai, result IS the response object.
+    const responseCandidate = result.candidates?.[0];
     const contentParts = responseCandidate?.content?.parts || [];
     
     // Extract Text
