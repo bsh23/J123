@@ -48,11 +48,13 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  // Only scroll to bottom when changing chats, NOT when chatSessions updates via polling.
+  // This prevents the view from jumping while the admin is reading history.
   useEffect(() => {
     if (selectedChatId) {
       scrollToBottom();
     }
-  }, [selectedChatId, chatSessions]);
+  }, [selectedChatId]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -110,6 +112,9 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                 }
                 return c;
             }));
+            
+            // Explicitly scroll to bottom when Admin sends a message
+            setTimeout(scrollToBottom, 100);
         } else {
             alert("Failed to send message via WhatsApp API.");
         }
