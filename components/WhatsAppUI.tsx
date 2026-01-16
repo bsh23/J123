@@ -1,25 +1,30 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Product, Message, ChatSession } from '../types';
+import { Product, Message, ChatSession, LeadsData, AnalyzedLead } from '../types';
 import { 
   MoreVertical, Search, Paperclip, Smile, 
   Send, CheckCheck, CircleDashed, ArrowLeft, Lock, Unlock, Bot, X, Trash2,
-  Sparkles
+  Sparkles, MessageSquare, PhoneCall, DollarSign, MapPin, Loader2, RefreshCw
 } from 'lucide-react';
 
 interface WhatsAppUIProps {
   products: Product[];
   openCatalog: () => void;
   openSettings: () => void;
-  openAnalysis: () => void;
+  openAnalysis: () => void; // Kept for interface compatibility but logic moved internally
 }
 
-const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSettings, openAnalysis }) => {
+const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSettings }) => {
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
   
+  // Sidebar State
+  const [sidebarView, setSidebarView] = useState<'chats' | 'leads'>('chats');
+  const [leadsData, setLeadsData] = useState<LeadsData | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -42,6 +47,32 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
     return () => clearInterval(interval);
   }, []);
 
+  // Fetch Leads on Mount or Tab Switch
+  useEffect(() => {
+    if (sidebarView === 'leads' && !leadsData) {
+        fetchLeads(false); // Fetch cached
+    }
+  }, [sidebarView]);
+
+  const fetchLeads = async (force: boolean) => {
+    setIsAnalyzing(true);
+    try {
+        const res = await fetch('/api/analyze-leads', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ force })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            setLeadsData(data);
+        }
+    } catch (err) {
+        console.error("Analysis failed", err);
+    } finally {
+        setIsAnalyzing(false);
+    }
+  };
+
   const selectedChat = chatSessions.find(c => c.id === selectedChatId);
   const isEscalated = selectedChat?.isEscalated || false;
   const isBotActive = selectedChat?.botActive !== false; // Default true if undefined
@@ -50,8 +81,6 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // Only scroll to bottom when changing chats, NOT when chatSessions updates via polling.
-  // This prevents the view from jumping while the admin is reading history.
   useEffect(() => {
     if (selectedChatId) {
       scrollToBottom();
@@ -95,7 +124,6 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
             setInputText('');
             clearAttachment();
             
-            // Optimistic update
             setChatSessions(prev => prev.map(c => {
                 if (c.id === selectedChatId) {
                     const newMsg: any = { 
@@ -115,7 +143,6 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                 return c;
             }));
             
-            // Explicitly scroll to bottom when Admin sends a message
             setTimeout(scrollToBottom, 100);
         } else {
             alert("Failed to send message via WhatsApp API.");
@@ -139,7 +166,6 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
         });
         
         if (res.ok) {
-            // Force immediate local update
             setChatSessions(prev => prev.map(c => {
                 if (c.id === selectedChatId) {
                     return { ...c, botActive: newStatus, isEscalated: newStatus ? false : c.isEscalated };
@@ -157,10 +183,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
     if (!confirm("Are you sure you want to delete this conversation permanently? This action cannot be undone.")) return;
 
     try {
-        const res = await fetch(`/api/chat/${selectedChatId}`, {
-            method: 'DELETE'
-        });
-
+        const res = await fetch(`/api/chat/${selectedChatId}`, { method: 'DELETE' });
         if (res.ok) {
             setChatSessions(prev => prev.filter(c => c.id !== selectedChatId));
             setSelectedChatId(null);
@@ -182,100 +205,193 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  const handleLeadClick = (phone: string) => {
+      setSelectedChatId(phone);
+  };
+
+  const renderLeadCategory = (title: string, leads: AnalyzedLead[], icon: React.ReactNode, bgColor: string, textColor: string) => {
+      if (!leads || leads.length === 0) return null;
+      return (
+          <div className="mb-4">
+              <div className={`flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider ${bgColor} ${textColor}`}>
+                  {icon} {title} ({leads.length})
+              </div>
+              {leads.map((lead, i) => (
+                  <div 
+                    key={i} 
+                    onClick={() => handleLeadClick(lead.phone)}
+                    className="px-4 py-3 border-b border-gray-100 hover:bg-gray-50 cursor-pointer group"
+                  >
+                      <div className="flex justify-between items-start">
+                          <h4 className="font-semibold text-gray-800 text-sm">{lead.name}</h4>
+                          <span className="text-[10px] text-gray-400 font-mono">{lead.phone}</span>
+                      </div>
+                      <p className="text-xs text-gray-600 mt-1 italic leading-relaxed group-hover:text-gray-900 transition-colors">
+                          "{lead.reason}"
+                      </p>
+                  </div>
+              ))}
+          </div>
+      );
+  };
+
   return (
     <div className="flex h-full w-full max-w-[1600px] mx-auto shadow-2xl overflow-hidden bg-[#f0f2f5] border border-gray-300/50 rounded-lg">
       
-      {/* Sidebar - Contacts List */}
+      {/* Sidebar */}
       <div className={`
         w-full md:w-[35%] lg:w-[30%] bg-white border-r border-gray-300 flex flex-col
         ${selectedChatId ? 'hidden md:flex' : 'flex'}
       `}>
         {/* Sidebar Header */}
-        <div className="h-16 bg-[#f0f2f5] px-4 flex items-center justify-between border-b border-gray-200 flex-shrink-0">
-          <div className="w-10 h-10 rounded-full bg-gray-300 overflow-hidden cursor-pointer border border-gray-200">
-             <img src="https://i.ibb.co/0yVkM0Zr/jtv.png" alt="Admin" className="w-full h-full object-cover" />
-          </div>
-          <div className="flex gap-4 text-gray-500">
-            <CircleDashed size={24} className="cursor-pointer" />
-            <div className="relative group">
-              <button className="hover:bg-gray-200 rounded-full p-1 transition-colors">
-                <MoreVertical size={24} />
-              </button>
-              <div className="absolute right-0 top-10 w-56 bg-white shadow-xl rounded py-2 hidden group-hover:block z-50 border border-gray-100">
-                <div className="px-4 py-3 hover:bg-gray-100 cursor-pointer text-[#008069] font-semibold text-sm flex items-center gap-2" onClick={openAnalysis}>
-                  <Sparkles size={16} /> Analyze Leads (AI)
+        <div className="bg-[#f0f2f5] flex flex-col flex-shrink-0 border-b border-gray-200">
+            {/* Top Bar */}
+            <div className="h-16 px-4 flex items-center justify-between">
+                <div className="w-10 h-10 rounded-full bg-gray-300 overflow-hidden cursor-pointer border border-gray-200">
+                    <img src="https://i.ibb.co/0yVkM0Zr/jtv.png" alt="Admin" className="w-full h-full object-cover" />
                 </div>
-                <div className="h-px bg-gray-100 my-1"></div>
-                <div className="px-4 py-3 hover:bg-gray-100 cursor-pointer text-gray-700 text-sm" onClick={openCatalog}>
-                  Add Products
+                <div className="flex gap-4 text-gray-500">
+                    <div className="relative group">
+                    <button className="hover:bg-gray-200 rounded-full p-1 transition-colors">
+                        <MoreVertical size={24} />
+                    </button>
+                    <div className="absolute right-0 top-10 w-56 bg-white shadow-xl rounded py-2 hidden group-hover:block z-50 border border-gray-100">
+                        <div className="px-4 py-3 hover:bg-gray-100 cursor-pointer text-gray-700 text-sm" onClick={openCatalog}>
+                        Add Products
+                        </div>
+                        <div className="px-4 py-3 hover:bg-gray-100 cursor-pointer text-gray-700 text-sm" onClick={openSettings}>
+                        Settings
+                        </div>
+                    </div>
+                    </div>
                 </div>
-                <div className="px-4 py-3 hover:bg-gray-100 cursor-pointer text-gray-700 text-sm" onClick={openSettings}>
-                  Settings
-                </div>
-              </div>
             </div>
-          </div>
+
+            {/* View Tabs */}
+            <div className="flex px-2 pb-2 gap-2">
+                <button 
+                    onClick={() => setSidebarView('chats')}
+                    className={`flex-1 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-all
+                    ${sidebarView === 'chats' ? 'bg-white shadow text-[#008069]' : 'text-gray-500 hover:bg-gray-200'}`}
+                >
+                    <MessageSquare size={16} /> Chats
+                </button>
+                <button 
+                    onClick={() => setSidebarView('leads')}
+                    className={`flex-1 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-all
+                    ${sidebarView === 'leads' ? 'bg-white shadow text-[#008069]' : 'text-gray-500 hover:bg-gray-200'}`}
+                >
+                    <Sparkles size={16} /> AI Leads
+                </button>
+            </div>
         </div>
 
-        {/* Search Bar */}
-        <div className="p-2 border-b border-gray-200 bg-white flex-shrink-0">
-          <div className="bg-[#f0f2f5] rounded-lg h-9 flex items-center px-4 gap-4">
-            <Search size={18} className="text-gray-500" />
-            <input 
-              type="text" 
-              placeholder="Search chats" 
-              className="bg-transparent w-full text-sm focus:outline-none placeholder-gray-500 text-gray-700"
-            />
-          </div>
-        </div>
-
-        {/* Chat List */}
+        {/* Sidebar Content */}
         <div className="flex-1 overflow-y-auto bg-white">
-          {chatSessions.length === 0 ? (
-             <div className="p-8 text-center text-gray-400 text-sm">
-                <p>No active conversations yet.</p>
-                <p className="mt-2">Messages sent to your WhatsApp number will appear here.</p>
-             </div>
-          ) : (
-             chatSessions.map(chat => (
-              <div 
-                key={chat.id}
-                onClick={() => setSelectedChatId(chat.id)}
-                className={`flex items-center gap-3 p-3 cursor-pointer border-b border-gray-100 transition-colors relative
-                  ${selectedChatId === chat.id ? 'bg-[#f0f2f5]' : 'hover:bg-[#f5f6f6]'}
-                  ${(chat.isEscalated || chat.botActive === false) ? 'bg-red-50 hover:bg-red-100 border-l-4 border-l-red-600' : ''}
-                `}
-              >
-                <div className="w-12 h-12 rounded-full overflow-hidden flex-shrink-0 border border-gray-100 bg-gray-200 flex items-center justify-center relative">
-                   <span className="text-gray-500 font-bold text-lg">{chat.contactName.charAt(0)}</span>
-                   {(chat.isEscalated || chat.botActive === false) && (
-                     <div className="absolute bottom-0 right-0 w-4 h-4 bg-red-600 rounded-full border-2 border-white flex items-center justify-center">
-                         <Lock size={10} className="text-white" />
-                     </div>
-                   )}
+            
+            {/* CHATS VIEW */}
+            {sidebarView === 'chats' && (
+                <>
+                {/* Search */}
+                <div className="p-2 border-b border-gray-200 bg-white sticky top-0 z-10">
+                    <div className="bg-[#f0f2f5] rounded-lg h-9 flex items-center px-4 gap-4">
+                        <Search size={18} className="text-gray-500" />
+                        <input type="text" placeholder="Search chats" className="bg-transparent w-full text-sm focus:outline-none placeholder-gray-500 text-gray-700" />
+                    </div>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-baseline">
-                    <h3 className={`font-medium truncate ${chat.isEscalated ? 'text-red-700 font-bold' : 'text-gray-900'}`}>
-                        {chat.contactName}
-                    </h3>
-                    <span className="text-xs text-gray-500">{formatTime(chat.lastMessageTime)}</span>
-                  </div>
-                  <div className="text-xs text-[#008069] font-medium mb-1">+{chat.id}</div>
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm text-gray-500 truncate flex items-center gap-1 max-w-[70%]">
-                      {chat.messages[chat.messages.length-1]?.text || 'Photo'}
-                    </p>
-                    {(chat.isEscalated || chat.botActive === false) && (
-                      <span className="text-[10px] bg-red-600 text-white px-2 py-1 rounded-full font-bold shadow-sm animate-pulse">
-                        ACTION
-                      </span>
+
+                {/* List */}
+                {chatSessions.length === 0 ? (
+                    <div className="p-8 text-center text-gray-400 text-sm">
+                        <p>No active conversations yet.</p>
+                    </div>
+                ) : (
+                    chatSessions.map(chat => (
+                    <div 
+                        key={chat.id}
+                        onClick={() => setSelectedChatId(chat.id)}
+                        className={`flex items-center gap-3 p-3 cursor-pointer border-b border-gray-100 transition-colors relative
+                        ${selectedChatId === chat.id ? 'bg-[#f0f2f5]' : 'hover:bg-[#f5f6f6]'}
+                        ${(chat.isEscalated || chat.botActive === false) ? 'bg-red-50 hover:bg-red-100 border-l-4 border-l-red-600' : ''}
+                        `}
+                    >
+                        <div className="w-12 h-12 rounded-full overflow-hidden flex-shrink-0 border border-gray-100 bg-gray-200 flex items-center justify-center relative">
+                        <span className="text-gray-500 font-bold text-lg">{chat.contactName.charAt(0)}</span>
+                        {(chat.isEscalated || chat.botActive === false) && (
+                            <div className="absolute bottom-0 right-0 w-4 h-4 bg-red-600 rounded-full border-2 border-white flex items-center justify-center">
+                                <Lock size={10} className="text-white" />
+                            </div>
+                        )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                        <div className="flex justify-between items-baseline">
+                            <h3 className={`font-medium truncate ${chat.isEscalated ? 'text-red-700 font-bold' : 'text-gray-900'}`}>
+                                {chat.contactName}
+                            </h3>
+                            <span className="text-xs text-gray-500">{formatTime(chat.lastMessageTime)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                            <p className="text-sm text-gray-500 truncate flex items-center gap-1 max-w-[70%]">
+                            {chat.messages[chat.messages.length-1]?.text || 'Photo'}
+                            </p>
+                            {(chat.isEscalated || chat.botActive === false) && (
+                            <span className="text-[10px] bg-red-600 text-white px-2 py-1 rounded-full font-bold shadow-sm animate-pulse">
+                                ACTION
+                            </span>
+                            )}
+                        </div>
+                        </div>
+                    </div>
+                    ))
+                )}
+                </>
+            )}
+
+            {/* LEADS VIEW */}
+            {sidebarView === 'leads' && (
+                <div className="min-h-full bg-white relative">
+                    <div className="p-4 bg-gray-50 border-b border-gray-200 sticky top-0 z-10 flex justify-between items-center">
+                         <div>
+                            <h3 className="text-sm font-bold text-gray-700">AI Opportunity Scanner</h3>
+                            <p className="text-xs text-gray-500">
+                                {leadsData?.lastUpdated ? `Updated: ${new Date(leadsData.lastUpdated).toLocaleTimeString()}` : 'No scan yet'}
+                            </p>
+                         </div>
+                         <button 
+                            onClick={() => fetchLeads(true)}
+                            disabled={isAnalyzing}
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold text-white transition-all
+                                ${isAnalyzing ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#008069] hover:bg-[#006d59] shadow-sm'}
+                            `}
+                         >
+                            <RefreshCw size={14} className={isAnalyzing ? 'animate-spin' : ''} />
+                            {isAnalyzing ? 'Scanning...' : 'Scan Now'}
+                         </button>
+                    </div>
+
+                    {isAnalyzing && !leadsData && (
+                        <div className="p-8 flex flex-col items-center justify-center text-gray-400">
+                            <Loader2 size={32} className="animate-spin mb-2" />
+                            <p className="text-sm">Analyzing conversations...</p>
+                        </div>
                     )}
-                  </div>
+
+                    {!isAnalyzing && leadsData && (
+                        <div className="pb-10 animate-fade-in">
+                            {(!leadsData.serious.length && !leadsData.stalled.length && !leadsData.visiting.length && !leadsData.followUp.length) && (
+                                <div className="p-8 text-center text-gray-400 text-sm">
+                                    No leads found in recent chats.
+                                </div>
+                            )}
+
+                            {renderLeadCategory('Call Immediately', leadsData.serious, <PhoneCall size={14} />, 'bg-red-100', 'text-red-700')}
+                            {renderLeadCategory('Price Negotiation', leadsData.stalled, <DollarSign size={14} />, 'bg-orange-100', 'text-orange-700')}
+                            {renderLeadCategory('Visiting Soon', leadsData.visiting, <MapPin size={14} />, 'bg-blue-100', 'text-blue-700')}
+                            {renderLeadCategory('Follow Up', leadsData.followUp, <MessageSquare size={14} />, 'bg-gray-100', 'text-gray-700')}
+                        </div>
+                    )}
                 </div>
-              </div>
-             ))
-          )}
+            )}
         </div>
       </div>
 

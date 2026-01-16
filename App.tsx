@@ -2,14 +2,12 @@ import React, { useState, useEffect } from 'react';
 import WhatsAppUI from './components/WhatsAppUI';
 import ProductCatalog from './components/ProductCatalog';
 import SettingsModal from './components/SettingsModal';
-import LeadAnalysisModal from './components/LeadAnalysisModal';
 import { Product } from './types';
 
 const App: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
   
   // Track loading state: 'init', 'success', 'error'
   const [loadStatus, setLoadStatus] = useState<'init' | 'success' | 'error'>('init');
@@ -119,7 +117,7 @@ const App: React.FC = () => {
           products={products}
           openCatalog={() => setIsCatalogOpen(true)}
           openSettings={() => setIsSettingsOpen(true)}
-          openAnalysis={() => setIsAnalysisOpen(true)}
+          openAnalysis={() => {}} // No-op, managed internally now
         />
       </div>
 
@@ -135,11 +133,6 @@ const App: React.FC = () => {
       <SettingsModal 
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
-      />
-
-      <LeadAnalysisModal
-        isOpen={isAnalysisOpen}
-        onClose={() => setIsAnalysisOpen(false)}
       />
       
       {loadStatus === 'error' && (

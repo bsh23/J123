@@ -19,6 +19,7 @@ const PORT = 5041;
 const DOMAIN = 'https://whatsapp.johntechvendorsltd.co.ke';
 const DATA_FILE = path.join(__dirname, 'inventory.json');
 const CHATS_FILE = path.join(__dirname, 'chats.json');
+const LEADS_FILE = path.join(__dirname, 'leads.json');
 const CONFIG_FILE = path.join(__dirname, 'server-config.json');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
@@ -30,6 +31,7 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 // --- STATE MANAGEMENT ---
 let productInventory = [];
 let chatSessions = {}; 
+let leadsData = { serious: [], stalled: [], visiting: [], followUp: [], lastUpdated: null };
 
 // Fallback credentials
 let serverConfig = {
@@ -69,12 +71,26 @@ async function loadChats() {
   }
 }
 
+async function loadLeads() {
+  try {
+    const data = await readFile(LEADS_FILE, 'utf8');
+    leadsData = JSON.parse(data);
+    console.log(`✨ LEADS: Loaded cached analysis.`);
+  } catch (err) {
+    leadsData = { serious: [], stalled: [], visiting: [], followUp: [], lastUpdated: null };
+  }
+}
+
 async function saveChats() {
   try { await writeFile(CHATS_FILE, JSON.stringify(chatSessions, null, 2)); } catch (err) { console.error('❌ CHAT SAVE ERROR:', err.message); }
 }
 
 async function saveInventory() {
   try { await writeFile(DATA_FILE, JSON.stringify(productInventory, null, 2)); } catch (err) { console.error('❌ INVENTORY SAVE ERROR:', err.message); }
+}
+
+async function saveLeads() {
+  try { await writeFile(LEADS_FILE, JSON.stringify(leadsData, null, 2)); } catch (err) { console.error('❌ LEADS SAVE ERROR:', err.message); }
 }
 
 async function loadServerConfig() {
@@ -278,6 +294,13 @@ app.get('/api/chats', (req, res) => {
 
 // --- LEAD ANALYSIS ENDPOINT ---
 app.post('/api/analyze-leads', async (req, res) => {
+  const { force } = req.body;
+  
+  // Return cached data if available and not forced
+  if (!force && leadsData.lastUpdated) {
+    return res.json(leadsData);
+  }
+
   const apiKey = getApiKey();
   if (!apiKey) return res.status(500).json({ error: "API Key missing" });
 
@@ -288,7 +311,7 @@ app.post('/api/analyze-leads', async (req, res) => {
       .sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime))
       .slice(0, 30); // Limit to top 30 active chats to manage token usage
 
-    if (activeChats.length === 0) return res.json({ serious: [], stalled: [], visiting: [], followUp: [] });
+    if (activeChats.length === 0) return res.json({ serious: [], stalled: [], visiting: [], followUp: [], lastUpdated: new Date() });
 
     // 2. Prepare Data for Gemini
     const analysisPrompt = `
@@ -300,11 +323,11 @@ app.post('/api/analyze-leads', async (req, res) => {
         Phone: ${c.id}
         Name: ${c.contactName}
         Last Msg: "${c.lastMessage}"
-        History Summary: ${c.messages.slice(-8).map(m => `[${m.sender}]: ${m.text || 'image'}`).join(' | ')}
+        History Summary: ${c.messages.slice(-15).map(m => `[${m.sender}]: ${m.text || 'image'}`).join(' | ')}
       `).join('\n----------------\n')}
 
       TASKS:
-      Categorize each customer based on their *latest* intent:
+      Categorize each customer based on their *latest* intent. Include the EXACT phone number provided.
       1. "serious": Ready to buy, asked for payment details, or highly interested. Needs ADMIN CALL immediately.
       2. "stalled": Interested but stopped replying after price was mentioned or is negotiating.
       3. "visiting": Explicitly said they will visit the shop/location.
@@ -331,7 +354,10 @@ app.post('/api/analyze-leads', async (req, res) => {
     });
 
     const result = JSON.parse(response.text);
-    res.json(result);
+    leadsData = { ...result, lastUpdated: new Date().toISOString() };
+    await saveLeads();
+    
+    res.json(leadsData);
 
   } catch (err) {
     console.error("Analysis Error:", err);
@@ -704,7 +730,7 @@ app.get('*', (req, res) => {
   }
 });
 
-Promise.all([loadInventory(), loadChats(), loadServerConfig()]).then(() => {
+Promise.all([loadInventory(), loadChats(), loadLeads(), loadServerConfig()]).then(() => {
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log("________________________________________________________________");
     console.log(`✅ SERVER STARTED ON PORT: ${PORT}`);

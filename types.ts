@@ -50,3 +50,17 @@ export interface ChatSession {
   isEscalated?: boolean; // True if Admin attention is needed (Red Flag)
   botActive?: boolean;   // True if Bot is handling, False if locked for Admin
 }
+
+export interface AnalyzedLead {
+  phone: string;
+  name: string;
+  reason: string;
+}
+
+export interface LeadsData {
+  serious: AnalyzedLead[];
+  stalled: AnalyzedLead[];
+  visiting: AnalyzedLead[];
+  followUp: AnalyzedLead[];
+  lastUpdated?: string;
+}
