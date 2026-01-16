@@ -132,6 +132,14 @@ DESCRIPTION: ${p.description}`).join('\n')
   return `You are "John", a friendly and consultative sales agent for "JohnTech Vendors Ltd".
   LOCATION: Thika Road, Kihunguro, Behind Shell Petrol Station.
   
+  *** CRITICAL: LANGUAGE MIRRORING ***
+  You MUST detect and mirror the user's language style:
+  1. **Strict English:** If user speaks formal English, reply in formal English.
+  2. **Swahili/Sheng Mix:** If user speaks Swahili or "Sheng" (e.g., "Kuna form?", "Bei ni ngapi?", "Niko area"), you MUST reply in a casual Kenyan Swahili/English mix. 
+     - Example User: "Hii machine inatoka ngapi?"
+     - Example You: "Hii tunaanzia KSh 30,000. Ni ya 1 Tap na ni automatic."
+  3. **DO NOT** sound robotic or strictly formal if the user is casual. Build rapport.
+  
   *** YOUR CORE BEHAVIOR: CONSULTATIVE SELLING ***
   
   You are NOT a catalog search engine. You are a consultant. 
@@ -266,6 +274,69 @@ app.delete('/api/product/:id', async (req, res) => {
 app.get('/api/chats', (req, res) => {
     const chatsArray = Object.values(chatSessions).sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
     res.json(chatsArray);
+});
+
+// --- LEAD ANALYSIS ENDPOINT ---
+app.post('/api/analyze-leads', async (req, res) => {
+  const apiKey = getApiKey();
+  if (!apiKey) return res.status(500).json({ error: "API Key missing" });
+
+  try {
+    // 1. Filter chats that have actual conversation history (more than 2 messages)
+    const activeChats = Object.values(chatSessions)
+      .filter(c => c.messages.length > 2)
+      .sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime))
+      .slice(0, 30); // Limit to top 30 active chats to manage token usage
+
+    if (activeChats.length === 0) return res.json({ serious: [], stalled: [], visiting: [], followUp: [] });
+
+    // 2. Prepare Data for Gemini
+    const analysisPrompt = `
+      You are an expert Sales Manager for JohnTech Vendors. 
+      Analyze the following WhatsApp conversation summaries and categorize the customers into 4 specific lists.
+
+      INPUT DATA (Chats):
+      ${activeChats.map(c => `
+        Phone: ${c.id}
+        Name: ${c.contactName}
+        Last Msg: "${c.lastMessage}"
+        History Summary: ${c.messages.slice(-8).map(m => `[${m.sender}]: ${m.text || 'image'}`).join(' | ')}
+      `).join('\n----------------\n')}
+
+      TASKS:
+      Categorize each customer based on their *latest* intent:
+      1. "serious": Ready to buy, asked for payment details, or highly interested. Needs ADMIN CALL immediately.
+      2. "stalled": Interested but stopped replying after price was mentioned or is negotiating.
+      3. "visiting": Explicitly said they will visit the shop/location.
+      4. "followUp": General inquiries, asked about specs, awaiting reply.
+
+      OUTPUT FORMAT:
+      Return strictly a JSON object with this schema:
+      {
+        "serious": [{ "phone": "...", "name": "...", "reason": "..." }],
+        "stalled": [{ "phone": "...", "name": "...", "reason": "..." }],
+        "visiting": [{ "phone": "...", "name": "...", "reason": "..." }],
+        "followUp": [{ "phone": "...", "name": "...", "reason": "..." }]
+      }
+    `;
+
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: analysisPrompt,
+      config: {
+        responseMimeType: "application/json",
+        temperature: 0.2 // Low temperature for consistent categorization
+      },
+    });
+
+    const result = JSON.parse(response.text);
+    res.json(result);
+
+  } catch (err) {
+    console.error("Analysis Error:", err);
+    res.status(500).json({ error: "Failed to analyze leads" });
+  }
 });
 
 app.delete('/api/chat/:id', async (req, res) => {

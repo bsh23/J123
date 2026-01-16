@@ -2,16 +2,18 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Product, Message, ChatSession } from '../types';
 import { 
   MoreVertical, Search, Paperclip, Smile, 
-  Send, CheckCheck, CircleDashed, ArrowLeft, Lock, Unlock, Bot, X, Trash2
+  Send, CheckCheck, CircleDashed, ArrowLeft, Lock, Unlock, Bot, X, Trash2,
+  Sparkles
 } from 'lucide-react';
 
 interface WhatsAppUIProps {
   products: Product[];
   openCatalog: () => void;
   openSettings: () => void;
+  openAnalysis: () => void;
 }
 
-const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSettings }) => {
+const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSettings, openAnalysis }) => {
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [inputText, setInputText] = useState('');
@@ -199,7 +201,11 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
               <button className="hover:bg-gray-200 rounded-full p-1 transition-colors">
                 <MoreVertical size={24} />
               </button>
-              <div className="absolute right-0 top-10 w-48 bg-white shadow-xl rounded py-2 hidden group-hover:block z-50 border border-gray-100">
+              <div className="absolute right-0 top-10 w-56 bg-white shadow-xl rounded py-2 hidden group-hover:block z-50 border border-gray-100">
+                <div className="px-4 py-3 hover:bg-gray-100 cursor-pointer text-[#008069] font-semibold text-sm flex items-center gap-2" onClick={openAnalysis}>
+                  <Sparkles size={16} /> Analyze Leads (AI)
+                </div>
+                <div className="h-px bg-gray-100 my-1"></div>
                 <div className="px-4 py-3 hover:bg-gray-100 cursor-pointer text-gray-700 text-sm" onClick={openCatalog}>
                   Add Products
                 </div>
