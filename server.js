@@ -112,6 +112,32 @@ async function saveServerConfig() {
 const getApiKey = () => process.env.API_KEY; 
 const MODEL_NAME = 'gemini-3-flash-preview';
 
+// --- HELPER: RETRY LOGIC ---
+async function sendMessageWithRetry(chat, parts) {
+    const maxRetries = 3;
+    let lastError;
+
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            return await chat.sendMessage({ message: { parts } });
+        } catch (err) {
+            lastError = err;
+            const status = err.response?.status || err.status || (err.response?.data?.error?.code);
+            const msg = err.message || JSON.stringify(err.response?.data);
+
+            // Retry on 503 (Service Unavailable) or 429 (Too Many Requests) or "overloaded"
+            if (status === 503 || status === 429 || msg.includes('overloaded')) {
+                const delay = 2000 * (i + 1); // 2s, 4s, 6s wait time
+                console.warn(`⚠️ Gemini Model Overloaded (503). Retrying in ${delay}ms... (Attempt ${i+1}/${maxRetries})`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            } else {
+                throw err; // Don't retry other errors (e.g., 400 Bad Request)
+            }
+        }
+    }
+    throw lastError;
+}
+
 // --- TOOLS ---
 const displayProductTool = {
   name: 'displayProduct',
@@ -645,7 +671,8 @@ app.post('/webhook', async (req, res) => {
       history: historyParts
     });
 
-    const result = await chat.sendMessage({ message: { parts: geminiParts } });
+    // IMPLEMENTED RETRY LOGIC HERE
+    const result = await sendMessageWithRetry(chat, geminiParts);
 
     // --- MANUAL RESPONSE EXTRACTION TO AVOID SDK WARNINGS ---
     // Note: In @google/genai, result IS the response object.
