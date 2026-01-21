@@ -20,6 +20,7 @@ const DOMAIN = 'https://whatsapp.johntechvendorsltd.co.ke';
 const DATA_FILE = path.join(__dirname, 'inventory.json');
 const CHATS_FILE = path.join(__dirname, 'chats.json');
 const LEADS_FILE = path.join(__dirname, 'leads.json');
+const QUEUE_FILE = path.join(__dirname, 'failed_requests.json');
 const CONFIG_FILE = path.join(__dirname, 'server-config.json');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
@@ -32,6 +33,7 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 let productInventory = [];
 let chatSessions = {}; 
 let leadsData = { serious: [], stalled: [], visiting: [], followUp: [], lastUpdated: null };
+let retryQueue = [];
 
 // Fallback credentials
 let serverConfig = {
@@ -81,6 +83,16 @@ async function loadLeads() {
   }
 }
 
+async function loadQueue() {
+    try {
+        const data = await readFile(QUEUE_FILE, 'utf8');
+        retryQueue = JSON.parse(data);
+        if (retryQueue.length > 0) console.log(`⚠️  RECOVERY: Loaded ${retryQueue.length} pending messages from previous session.`);
+    } catch (err) {
+        retryQueue = [];
+    }
+}
+
 async function saveChats() {
   try { await writeFile(CHATS_FILE, JSON.stringify(chatSessions, null, 2)); } catch (err) { console.error('❌ CHAT SAVE ERROR:', err.message); }
 }
@@ -91,6 +103,10 @@ async function saveInventory() {
 
 async function saveLeads() {
   try { await writeFile(LEADS_FILE, JSON.stringify(leadsData, null, 2)); } catch (err) { console.error('❌ LEADS SAVE ERROR:', err.message); }
+}
+
+async function saveQueue() {
+    try { await writeFile(QUEUE_FILE, JSON.stringify(retryQueue, null, 2)); } catch (err) { console.error('❌ QUEUE SAVE ERROR:', err.message); }
 }
 
 async function loadServerConfig() {
@@ -114,7 +130,7 @@ const MODEL_NAME = 'gemini-3-flash-preview';
 
 // --- HELPER: RETRY LOGIC ---
 async function sendMessageWithRetry(chat, parts) {
-    const maxRetries = 3;
+    const maxRetries = 2; // Reduced retries to fail faster and move to queue
     let lastError;
 
     for (let i = 0; i < maxRetries; i++) {
@@ -127,16 +143,132 @@ async function sendMessageWithRetry(chat, parts) {
 
             // Retry on 503 (Service Unavailable) or 429 (Too Many Requests) or "overloaded"
             if (status === 503 || status === 429 || msg.includes('overloaded')) {
-                const delay = 2000 * (i + 1); // 2s, 4s, 6s wait time
-                console.warn(`⚠️ Gemini Model Overloaded (503). Retrying in ${delay}ms... (Attempt ${i+1}/${maxRetries})`);
+                const delay = 2000 * (i + 1); 
+                console.warn(`⚠️ Gemini Model Overloaded. Retrying in ${delay}ms...`);
                 await new Promise(resolve => setTimeout(resolve, delay));
             } else {
-                throw err; // Don't retry other errors (e.g., 400 Bad Request)
+                throw err; 
             }
         }
     }
     throw lastError;
 }
+
+// --- BACKGROUND WORKER: RECOVERY QUEUE ---
+// Runs every 60 seconds to check for messages that failed during downtime
+setInterval(async () => {
+    if (retryQueue.length === 0) return;
+
+    console.log(`🔄 QUEUE: Attempting to process ${retryQueue.length} pending items...`);
+    const apiKey = getApiKey();
+    if (!apiKey) return;
+
+    // Process one by one to avoid rate limits
+    const currentBatch = [...retryQueue]; 
+    // Clear queue locally, we will re-add failures
+    retryQueue = []; 
+    await saveQueue();
+
+    for (const item of currentBatch) {
+        try {
+            // Check if chat still exists and bot is active
+            if (!chatSessions[item.to] || chatSessions[item.to].botActive === false) {
+                console.log(`🗑️ Discarding queued message for ${item.to} (Chat deleted or Locked)`);
+                continue;
+            }
+
+            console.log(`🔄 Retrying AI response for ${item.to}...`);
+            const ai = new GoogleGenAI({ apiKey });
+            
+            // Re-construct history
+            const historyParts = chatSessions[item.to].messages
+                .filter(m => m.timestamp < item.timestamp) // Only history BEFORE this failed message
+                .slice(-30)
+                .map(m => ({
+                    role: m.sender === 'user' ? 'user' : 'model',
+                    parts: [{ text: (m.type === 'image') ? '[Image]' : (m.text || '') }]
+                }));
+
+            const chat = ai.chats.create({
+                model: MODEL_NAME,
+                config: {
+                    systemInstruction: getSystemInstruction(productInventory),
+                    tools: [{ functionDeclarations: [displayProductTool, escalateToAdminTool] }],
+                    temperature: 0.7,
+                },
+                history: historyParts
+            });
+
+            // Send the Original Request
+            const result = await sendMessageWithRetry(chat, item.parts);
+            
+            // --- PROCESS RESULT (Same as Webhook) ---
+            const responseCandidate = result.candidates?.[0];
+            const contentParts = responseCandidate?.content?.parts || [];
+            
+            let textResponse = contentParts.filter(part => part.text).map(part => part.text).join('');
+            const functionCalls = contentParts.filter(part => part.functionCall).map(part => part.functionCall);
+
+            let imagesToSend = [];
+            let shouldSilentLock = false;
+
+            if (functionCalls?.length > 0) {
+                for (const fc of functionCalls) {
+                    if (fc.name === 'displayProduct') {
+                         const product = productInventory.find(p => p.id === fc.args.productId);
+                         if (product?.images?.length) imagesToSend = product.images.slice(0, 5);
+                    }
+                    if (fc.name === 'escalateToAdmin') shouldSilentLock = true;
+                }
+            }
+
+            if (shouldSilentLock) {
+                chatSessions[item.to].botActive = false;
+                chatSessions[item.to].isEscalated = true;
+                await saveChats();
+                continue;
+            }
+
+            if (imagesToSend.length > 0) {
+                 for (let i = 0; i < imagesToSend.length; i++) {
+                     const link = `${DOMAIN}/api/render-image/${productInventory.find(p=>p.images.includes(imagesToSend[0])).id}/${i}`;
+                     await sendWhatsApp(item.to, { type: 'image', image: { link } });
+                 }
+            }
+
+            if (textResponse) {
+                textResponse = formatResponseText(textResponse);
+                await sendWhatsApp(item.to, { type: 'text', text: { body: textResponse } });
+            }
+            console.log(`✅ Recovered message for ${item.to}`);
+
+        } catch (err) {
+            console.error(`❌ Retry failed for ${item.to}:`, err.message);
+            // Re-add to queue if it was a network error, otherwise discard
+            if (err.status === 503 || err.code === 'ETIMEDOUT' || !err.status) {
+                retryQueue.push(item);
+                await saveQueue();
+            }
+        }
+    }
+}, 60000); // Run every 60 seconds
+
+// --- BACKGROUND WORKER: AUTO LEADS SCANNING ---
+// Checks every hour. If it's 00:00 (midnight), runs analysis.
+setInterval(async () => {
+    const now = new Date();
+    // Check if it's between 00:00 and 00:59
+    if (now.getHours() === 0) {
+        // Check if we already ran today
+        const lastRun = leadsData.lastUpdated ? new Date(leadsData.lastUpdated) : new Date(0);
+        
+        // If last run was NOT today
+        if (lastRun.getDate() !== now.getDate() || lastRun.getMonth() !== now.getMonth()) {
+            console.log("🕛 MIDNIGHT TRIGGER: Running Daily Lead Analysis...");
+            await performLeadAnalysis(false); // Force = false (Incremental)
+        }
+    }
+}, 3600000); // Check every 1 hour
 
 // --- TOOLS ---
 const displayProductTool = {
@@ -178,8 +310,6 @@ DESCRIPTION: ${p.description}`).join('\n')
   You MUST detect and mirror the user's language style:
   1. **Strict English:** If user speaks formal English, reply in formal English.
   2. **Swahili/Sheng Mix:** If user speaks Swahili or "Sheng" (e.g., "Kuna form?", "Bei ni ngapi?", "Niko area"), you MUST reply in a casual Kenyan Swahili/English mix. 
-     - Example User: "Hii machine inatoka ngapi?"
-     - Example You: "Hii tunaanzia KSh 30,000. Ni ya 1 Tap na ni automatic."
   3. **DO NOT** sound robotic or strictly formal if the user is casual. Build rapport.
   
   *** YOUR CORE BEHAVIOR: CONSULTATIVE SELLING ***
@@ -190,33 +320,26 @@ DESCRIPTION: ${p.description}`).join('\n')
   --- INTERACTION RULES ---
 
   1. **PHASE 1: QUALIFICATION (CRITICAL)**
-     - If a user asks for a category (e.g., "Do you have Milk ATMs?", "I need a water machine"), you **MUST** ask for specifications before proposing a product.
-     - **Milk/Oil ATMs:** Ask: "What capacity (Litres) are you looking for? We have sizes like 100L, 200L, etc."
-     - **Water Vending:** Ask: "Do you need Automatic or Manual? How many taps?"
-     - **Reverse Osmosis:** Ask: "What is the output capacity (LPH) you need?"
-     - **Milk Pasteurizers/Bottle Rinsers:** Ask for capacity/speed.
-     - **DO NOT** show an image or a specific price until the user answers this.
+     - **WATER PURIFICATION LOGIC (Strict Rule):**
+       - If user asks for "Water Machine", "Purification", "RO", or "Treatment", you **MUST** ask: "What is the source of your water? (e.g., Municipal/Kanjo, Borehole, River, or Salty?)"
+       - **IF Municipal/City Council/Kanjo:** You MUST recommend **Ultra Filtration (UF)**. Do NOT sell them Reverse Osmosis unless they insist.
+       - **IF Borehole/Salty/River:** You MUST recommend **Reverse Osmosis (RO)**.
+     
+     - **Milk/Oil ATMs:** Ask: "What capacity (Litres) are you looking for?"
+     - **DO NOT** show an image or a specific price until the user answers qualification questions.
 
-  2. **PHASE 2: STRICT PRODUCT MATCHING (CRITICAL)**
-     - You must ensure the product you select for 'displayProduct' **EXACTLY** matches the user's requirements found in the [SPECS].
-     - **EXAMPLE:** If user asks for "Water Vending 1 Tap", you MUST look at the SPECS JSON for 'taps': "1 Tap". 
+  2. **PHASE 2: STRICT PRODUCT MATCHING**
+     - Ensure the product you select for 'displayProduct' **EXACTLY** matches the user's requirements.
      - **PROHIBITED:** Do NOT send an image of a "2 Taps" machine if they asked for "1 Tap".
-     - **PROHIBITED:** Do NOT send an image of a "Milk ATM" if they asked for "Water Vending".
-     - **If the exact match is not found:** Tell the user you have similar items but confirm if they want to see them first. Do NOT auto-send the wrong image.
-     - **DO NOT** send an image immediately unless they say "Send me a photo".
-
-  3. **PHASE 3: PRICING STRATEGY (CRITICAL)**
-     - **STANDARD QUOTE:** When asked for price, always quote the **MAXIMUM** (High End) price listed in the [ITEM] details.
-       - Example: If range is 30,000 - 32,000. Say: "It goes for KSh 32,000."
-       - **DO NOT** mention the range (e.g., "30k-32k").
-     - **NEGOTIATION:** Only reveal the **MINIMUM** price if the user says "Too expensive", "Best price?", or asks for a discount.
-       - Example: "For you, the best I can do is KSh 30,000."
+     
+  3. **PHASE 3: PRICING STRATEGY**
+     - **STANDARD QUOTE:** Always quote the **MAXIMUM** (High End) price first.
+     - **NEGOTIATION:** Only reveal the **MINIMUM** price if the user says "Too expensive" or asks for a discount.
      - **DO NOT** use 'displayProduct' when answering price questions. Just give the text.
 
   4. **PHASE 4: ANSWERING GENERAL QUESTIONS**
      - **Location/How it works:** Answer purely with text.
      - **DO NOT** use 'displayProduct' when answering about location or operation.
-     - Explain the mechanism in simple layman's terms (benefits over specs).
 
   5. **PHASE 5: CLOSING**
      - Only use 'escalateToAdmin' if they are ready to pay via M-Pesa or Bank.
@@ -318,28 +441,40 @@ app.get('/api/chats', (req, res) => {
     res.json(chatsArray);
 });
 
-// --- LEAD ANALYSIS ENDPOINT ---
-app.post('/api/analyze-leads', async (req, res) => {
-  const { force } = req.body;
-  
-  // Return cached data if available and not forced
-  if (!force && leadsData.lastUpdated) {
-    return res.json(leadsData);
-  }
+// --- LEAD ANALYSIS LOGIC ---
+// Separated function for reuse in Cron and API
+async function performLeadAnalysis(force = false) {
+    const apiKey = getApiKey();
+    if (!apiKey) return null;
 
-  const apiKey = getApiKey();
-  if (!apiKey) return res.status(500).json({ error: "API Key missing" });
+    // 1. Filter chats: 
+    //    - Must have messages > 2
+    //    - If NOT forced, only analyze chats where lastMessageTime > lastAnalyzedTime
+    const chatsToAnalyze = Object.values(chatSessions).filter(c => {
+        if (c.messages.length <= 2) return false;
+        if (force) return true;
+        
+        const lastMsg = new Date(c.lastMessageTime).getTime();
+        const lastScan = c.lastAnalyzedTime ? new Date(c.lastAnalyzedTime).getTime() : 0;
+        return lastMsg > lastScan;
+    });
 
-  try {
-    // 1. Filter chats that have actual conversation history (more than 2 messages)
-    const activeChats = Object.values(chatSessions)
-      .filter(c => c.messages.length > 2)
-      .sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime))
-      .slice(0, 30); // Limit to top 30 active chats to manage token usage
+    // Sort to prioritize most recent active chats
+    chatsToAnalyze.sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
+    
+    // Slice to top 20 to save tokens, even in auto mode
+    const activeChats = chatsToAnalyze.slice(0, 20);
 
-    if (activeChats.length === 0) return res.json({ serious: [], stalled: [], visiting: [], followUp: [], lastUpdated: new Date() });
+    if (activeChats.length === 0) {
+        console.log("Lead Analysis: No new conversations to scan.");
+        // Just update timestamp
+        leadsData.lastUpdated = new Date().toISOString();
+        await saveLeads();
+        return leadsData;
+    }
 
-    // 2. Prepare Data for Gemini
+    console.log(`🧠 Analyzing ${activeChats.length} conversations...`);
+
     const analysisPrompt = `
       You are an expert Sales Manager for JohnTech Vendors. 
       Analyze the following WhatsApp conversation summaries and categorize the customers into 4 specific lists.
@@ -369,25 +504,68 @@ app.post('/api/analyze-leads', async (req, res) => {
       }
     `;
 
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: analysisPrompt,
-      config: {
-        responseMimeType: "application/json",
-        temperature: 0.2 // Low temperature for consistent categorization
-      },
-    });
+    try {
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: analysisPrompt,
+            config: {
+                responseMimeType: "application/json",
+                temperature: 0.2 
+            },
+        });
 
-    const result = JSON.parse(response.text);
-    leadsData = { ...result, lastUpdated: new Date().toISOString() };
-    await saveLeads();
-    
-    res.json(leadsData);
+        const result = JSON.parse(response.text);
+        
+        // Merge with existing data (Deduplicate based on phone)
+        const mergeLists = (oldList, newList) => {
+            const map = new Map();
+            oldList.forEach(i => map.set(i.phone, i));
+            // New list overwrites old if same phone
+            newList.forEach(i => map.set(i.phone, i)); 
+            return Array.from(map.values());
+        };
 
-  } catch (err) {
-    console.error("Analysis Error:", err);
-    res.status(500).json({ error: "Failed to analyze leads" });
+        leadsData = {
+            serious: mergeLists(leadsData.serious, result.serious || []),
+            stalled: mergeLists(leadsData.stalled, result.stalled || []),
+            visiting: mergeLists(leadsData.visiting, result.visiting || []),
+            followUp: mergeLists(leadsData.followUp, result.followUp || []),
+            lastUpdated: new Date().toISOString()
+        };
+
+        // Update lastAnalyzedTime for processed chats
+        const nowStr = new Date().toISOString();
+        activeChats.forEach(c => {
+            if (chatSessions[c.id]) {
+                chatSessions[c.id].lastAnalyzedTime = nowStr;
+            }
+        });
+
+        await saveLeads();
+        await saveChats(); // Save the new timestamps
+        return leadsData;
+
+    } catch (err) {
+        console.error("AI Analysis Failed:", err);
+        return null;
+    }
+}
+
+app.post('/api/analyze-leads', async (req, res) => {
+  const { force } = req.body;
+  
+  if (!force && leadsData.lastUpdated) {
+     // Check if less than 5 minutes since last update, return cache
+     const diff = new Date().getTime() - new Date(leadsData.lastUpdated).getTime();
+     if (diff < 300000) return res.json(leadsData);
+  }
+
+  const result = await performLeadAnalysis(force);
+  if (result) {
+      res.json(result);
+  } else {
+      res.status(500).json({ error: "Analysis failed" });
   }
 });
 
@@ -671,67 +849,74 @@ app.post('/webhook', async (req, res) => {
       history: historyParts
     });
 
-    // IMPLEMENTED RETRY LOGIC HERE
-    const result = await sendMessageWithRetry(chat, geminiParts);
+    try {
+        // IMPLEMENTED RETRY LOGIC HERE
+        const result = await sendMessageWithRetry(chat, geminiParts);
 
-    // --- MANUAL RESPONSE EXTRACTION TO AVOID SDK WARNINGS ---
-    // Note: In @google/genai, result IS the response object.
-    const responseCandidate = result.candidates?.[0];
-    const contentParts = responseCandidate?.content?.parts || [];
-    
-    // Extract Text
-    let textResponse = contentParts
-      .filter(part => part.text)
-      .map(part => part.text)
-      .join('');
+        // --- MANUAL RESPONSE EXTRACTION TO AVOID SDK WARNINGS ---
+        const responseCandidate = result.candidates?.[0];
+        const contentParts = responseCandidate?.content?.parts || [];
+        
+        // Extract Text
+        let textResponse = contentParts.filter(part => part.text).map(part => part.text).join('');
+        const functionCalls = contentParts.filter(part => part.functionCall).map(part => part.functionCall);
 
-    // Extract Function Calls
-    const functionCalls = contentParts
-      .filter(part => part.functionCall)
-      .map(part => part.functionCall);
-
-    let imagesToSend = [];
-    let shouldSilentLock = false;
-    
-    if (functionCalls && functionCalls.length > 0) {
-      for (const fc of functionCalls) {
-        if (fc.name === 'displayProduct') {
-           const product = productInventory.find(p => p.id === fc.args.productId);
-           if (product?.images?.length) imagesToSend = product.images.slice(0, 5);
+        let imagesToSend = [];
+        let shouldSilentLock = false;
+        
+        if (functionCalls && functionCalls.length > 0) {
+          for (const fc of functionCalls) {
+            if (fc.name === 'displayProduct') {
+               const product = productInventory.find(p => p.id === fc.args.productId);
+               if (product?.images?.length) imagesToSend = product.images.slice(0, 5);
+            }
+            if (fc.name === 'escalateToAdmin') {
+               shouldSilentLock = true;
+               console.log(`🚨 ESCALATION: ${fc.args.reason}`);
+            }
+          }
         }
-        if (fc.name === 'escalateToAdmin') {
-           shouldSilentLock = true;
-           console.log(`🚨 ESCALATION: ${fc.args.reason}`);
+
+        if (shouldSilentLock) {
+            chatSessions[senderPhone].botActive = false;
+            chatSessions[senderPhone].isEscalated = true;
+            await saveChats();
+            console.log(`🔒 Bot Locked Silently.`);
+            return; 
         }
-      }
-    }
 
-    if (shouldSilentLock) {
-        chatSessions[senderPhone].botActive = false;
-        chatSessions[senderPhone].isEscalated = true;
-        await saveChats();
-        console.log(`🔒 Bot Locked Silently.`);
-        return; 
-    }
+        if (imagesToSend.length > 0) {
+           for (let i = 0; i < imagesToSend.length; i++) {
+             const link = `${DOMAIN}/api/render-image/${productInventory.find(p=>p.images.includes(imagesToSend[0])).id}/${i}`;
+             await sendWhatsApp(senderPhone, { type: 'image', image: { link } });
+             await new Promise(r => setTimeout(r, 800)); 
+           }
+        }
 
-    if (imagesToSend.length > 0) {
-       for (let i = 0; i < imagesToSend.length; i++) {
-         const link = `${DOMAIN}/api/render-image/${productInventory.find(p=>p.images.includes(imagesToSend[0])).id}/${i}`;
-         await sendWhatsApp(senderPhone, { type: 'image', image: { link } });
-         await new Promise(r => setTimeout(r, 800)); 
-       }
-    }
-
-    if (textResponse) {
-      textResponse = formatResponseText(textResponse);
-      console.log(`🤖 Reply: ${textResponse.substring(0, 40)}...`);
-      await sendWhatsApp(senderPhone, { type: 'text', text: { body: textResponse } });
+        if (textResponse) {
+          textResponse = formatResponseText(textResponse);
+          console.log(`🤖 Reply: ${textResponse.substring(0, 40)}...`);
+          await sendWhatsApp(senderPhone, { type: 'text', text: { body: textResponse } });
+        }
+    } catch (err) {
+        // CRITICAL: ADD TO QUEUE IF FAILED
+        console.error("❌ Message Failed, adding to RETRY QUEUE:", err.message);
+        
+        // Don't queue invalid user errors, only system errors
+        if (err.status === 503 || err.code === 'ETIMEDOUT' || !err.status) {
+            retryQueue.push({
+                to: senderPhone,
+                parts: geminiParts,
+                timestamp: new Date().getTime()
+            });
+            await saveQueue();
+        }
     }
 
   } catch (err) {
     // Better Error Logging
     if (err.response) {
-       console.error('❌ GOOGLE API ERROR:', JSON.stringify(err.response.data, null, 2));
+       console.error('❌ SERVER/HOOK ERROR:', JSON.stringify(err.response.data, null, 2));
     } else {
        console.error('❌ ERROR:', err.message);
     }
@@ -757,7 +942,7 @@ app.get('*', (req, res) => {
   }
 });
 
-Promise.all([loadInventory(), loadChats(), loadLeads(), loadServerConfig()]).then(() => {
+Promise.all([loadInventory(), loadChats(), loadLeads(), loadQueue(), loadServerConfig()]).then(() => {
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log("________________________________________________________________");
     console.log(`✅ SERVER STARTED ON PORT: ${PORT}`);
