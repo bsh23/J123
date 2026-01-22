@@ -456,6 +456,8 @@ async function performLeadAnalysis(force = false) {
         
         const lastMsg = new Date(c.lastMessageTime).getTime();
         const lastScan = c.lastAnalyzedTime ? new Date(c.lastAnalyzedTime).getTime() : 0;
+        
+        // Incremental check: Only scan if new messages exist since last scan
         return lastMsg > lastScan;
     });
 
@@ -555,13 +557,14 @@ async function performLeadAnalysis(force = false) {
 app.post('/api/analyze-leads', async (req, res) => {
   const { force } = req.body;
   
-  if (!force && leadsData.lastUpdated) {
-     // Check if less than 5 minutes since last update, return cache
-     const diff = new Date().getTime() - new Date(leadsData.lastUpdated).getTime();
-     if (diff < 300000) return res.json(leadsData);
+  // FIX: If not forced, STRICTLY return cache.
+  // The frontend calls this with force=false on tab load.
+  // We do NOT want to trigger a scan here. Only at midnight or via "Scan Now".
+  if (!force) {
+    return res.json(leadsData);
   }
 
-  const result = await performLeadAnalysis(force);
+  const result = await performLeadAnalysis(true); // Force is true here (manual "Scan Now")
   if (result) {
       res.json(result);
   } else {
