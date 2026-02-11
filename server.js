@@ -1,3 +1,4 @@
+
 import 'dotenv/config';
 import express from 'express';
 import path from 'path';
@@ -15,7 +16,6 @@ app.use(express.json({ limit: '500mb' }));
 
 // --- CONFIGURATION ---
 const PORT = 5041; 
-const DOMAIN = 'https://whatsapp.johntechvendorsltd.co.ke';
 const DATA_FILE = path.join(__dirname, 'inventory.json');
 const CHATS_FILE = path.join(__dirname, 'chats.json');
 const LEADS_FILE = path.join(__dirname, 'leads.json');
@@ -32,7 +32,7 @@ let chatSessions = {};
 let leadsData = { categories: {}, lastUpdated: null };
 let knowledgeBase = []; 
 let retryQueue = [];
-let lastDailyRunDate = null; // To track daily execution
+let lastDailyRunDate = null; 
 
 let serverConfig = {
   accessToken: process.env.FB_ACCESS_TOKEN || '',
@@ -42,11 +42,11 @@ let serverConfig = {
 
 // --- PERSISTENCE ---
 async function loadAll() {
-    try { productInventory = JSON.parse(await readFile(DATA_FILE, 'utf8')); } catch (e) {}
-    try { chatSessions = JSON.parse(await readFile(CHATS_FILE, 'utf8')); } catch (e) {}
-    try { leadsData = JSON.parse(await readFile(LEADS_FILE, 'utf8')); } catch (e) {}
-    try { knowledgeBase = JSON.parse(await readFile(KB_FILE, 'utf8')); } catch (e) {}
-    try { retryQueue = JSON.parse(await readFile(QUEUE_FILE, 'utf8')); } catch (e) {}
+    try { productInventory = JSON.parse(await readFile(DATA_FILE, 'utf8')); } catch (e) { productInventory = []; }
+    try { chatSessions = JSON.parse(await readFile(CHATS_FILE, 'utf8')); } catch (e) { chatSessions = {}; }
+    try { leadsData = JSON.parse(await readFile(LEADS_FILE, 'utf8')); } catch (e) { leadsData = { categories: {}, lastUpdated: null }; }
+    try { knowledgeBase = JSON.parse(await readFile(KB_FILE, 'utf8')); } catch (e) { knowledgeBase = []; }
+    try { retryQueue = JSON.parse(await readFile(QUEUE_FILE, 'utf8')); } catch (e) { retryQueue = []; }
     try { 
         const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8')); 
         serverConfig = { ...serverConfig, ...saved };
@@ -56,7 +56,6 @@ async function loadAll() {
 async function saveChats() { await writeFile(CHATS_FILE, JSON.stringify(chatSessions, null, 2)); }
 async function saveLeads() { await writeFile(LEADS_FILE, JSON.stringify(leadsData, null, 2)); }
 async function saveKB() { await writeFile(KB_FILE, JSON.stringify(knowledgeBase, null, 2)); }
-async function saveQueue() { await writeFile(QUEUE_FILE, JSON.stringify(retryQueue, null, 2)); }
 async function saveInventory() { await writeFile(DATA_FILE, JSON.stringify(productInventory, null, 2)); }
 async function saveServerConfig() { await writeFile(CONFIG_FILE, JSON.stringify(serverConfig, null, 2)); }
 
@@ -66,7 +65,7 @@ const MODEL_NAME = 'gemini-3-flash-preview';
 
 // --- SELF-LEARNING ENGINE ---
 async function performSelfLearning() {
-    console.log("🧠 Learning Engine: Scanning Admin responses from today...");
+    console.log("🧠 Learning Engine: Scanning Admin responses...");
     const apiKey = getApiKey();
     if (!apiKey) return;
 
@@ -79,164 +78,102 @@ async function performSelfLearning() {
         return lastMsgTime > yesterday && hasAdminReply;
     });
 
-    if (relevantChats.length === 0) {
-        console.log("🧠 Learning Engine: No admin interactions to learn from today.");
-        return;
-    }
+    if (relevantChats.length === 0) return;
 
-    const learningPrompt = `
-    You are the Brain of JohnTech Vendors. Look at these conversations where a HUMAN ADMIN (expert) took over from the bot.
-    The admin's word is final. Your task is to extract NEW FACTS that aren't in your catalog.
-    
-    CONVERSATIONS:
-    ${relevantChats.map(c => c.messages.slice(-20).map(m => `[${m.sender === 'user' ? 'CLIENT' : (m.id && m.id.startsWith('admin_') ? 'ADMIN' : 'BOT')}]: ${m.text}`).join('\n')).join('\n---Next Chat---\n')}
-    
-    TASK:
-    Identify specific new info the Admin mentioned: custom prices, new shop rules, fabrication times, or technical answers.
-    Return strictly a JSON array of strings (short facts).
-    Example: ["100L Milk ATMs now come with a digital meter.", "Delivery to Nakuru is now KSh 2000."]
-    Return [] if nothing new.
-    `;
+    const learningPrompt = `Extract new facts from these admin responses for JohnTech Vendors. Return a JSON array of short strings. [${relevantChats.map(c => c.messages.slice(-10).map(m => m.text).join(' ')).join(' | ')}]`;
 
     try {
         const ai = new GoogleGenAI({ apiKey });
         const res = await ai.models.generateContent({ model: MODEL_NAME, contents: learningPrompt, config: { responseMimeType: "application/json" } });
         const newFacts = JSON.parse(res.text);
-        
-        if (Array.isArray(newFacts) && newFacts.length > 0) {
+        if (Array.isArray(newFacts)) {
             knowledgeBase = [...new Set([...knowledgeBase, ...newFacts])].slice(-100); 
             await saveKB();
-            console.log(`✅ Learned ${newFacts.length} new facts.`);
         }
     } catch (err) { console.error("Learning Error:", err.message); }
 }
 
-// --- CATEGORIZED LEAD ANALYSIS ---
+// --- LEAD ANALYSIS ---
 async function performLeadAnalysis(force = false) {
     const apiKey = getApiKey();
     if (!apiKey) return null;
-
-    const chatsToAnalyze = Object.values(chatSessions).filter(c => {
-        if (c.messages.length <= 2) return false;
-        if (force) return true;
-        const lastMsg = new Date(c.lastMessageTime).getTime();
-        const lastScan = c.lastAnalyzedTime ? new Date(c.lastAnalyzedTime).getTime() : 0;
-        return lastMsg > lastScan;
-    });
-
-    if (chatsToAnalyze.length === 0) {
-        leadsData.lastUpdated = new Date().toISOString();
-        await saveLeads();
-        return leadsData;
-    }
-
-    const analysisPrompt = `
-      Analyze these JohnTech Vendors WhatsApp chats.
-      
-      CHATS:
-      ${chatsToAnalyze.slice(0, 20).map(c => `Phone: ${c.id}\nHistory: ${c.messages.slice(-10).map(m=>m.text).join(' | ')}`).join('\n---\n')}
-
-      TASK:
-      1. Categorize each user by product: "Milk ATM", "Oil ATM", "Water Vending", "RO", "Pasteurizer", or "General".
-      2. Set "isSerious: true" ONLY if they asked for payment details, a site visit, or explicit delivery terms.
-
-      OUTPUT FORMAT:
-      Return strictly a JSON object:
-      {
-        "categories": {
-           "Milk ATM": [{ "phone": "...", "name": "...", "reason": "...", "isSerious": true }],
-           "General": [...]
-        }
-      }
-    `;
-
+    const analysisPrompt = `Categorize these leads for JohnTech Vendors. Return JSON: { "categories": { "Category": [{"phone":"", "name":"", "reason":"", "isSerious":true}] } } Chats: ${JSON.stringify(Object.values(chatSessions).slice(0, 10))}`;
     try {
         const ai = new GoogleGenAI({ apiKey });
         const res = await ai.models.generateContent({ model: MODEL_NAME, contents: analysisPrompt, config: { responseMimeType: "application/json" } });
-        const result = JSON.parse(res.text);
-
-        const newCats = result.categories || {};
-        const currentCats = leadsData.categories || {};
-
-        for (const catName in newCats) {
-            if (!currentCats[catName]) currentCats[catName] = [];
-            newCats[catName].forEach(newLead => {
-                const idx = currentCats[catName].findIndex(l => l.phone === newLead.phone);
-                if (idx !== -1) currentCats[catName][idx] = newLead;
-                else currentCats[catName].push(newLead);
-            });
-        }
-
-        leadsData = { categories: currentCats, lastUpdated: new Date().toISOString() };
-        const nowStr = new Date().toISOString();
-        chatsToAnalyze.forEach(c => { if(chatSessions[c.id]) chatSessions[c.id].lastAnalyzedTime = nowStr; });
-
+        leadsData = JSON.parse(res.text);
+        leadsData.lastUpdated = new Date().toISOString();
         await saveLeads();
-        await saveChats();
         return leadsData;
-    } catch (err) { console.error("Analysis Error:", err); return null; }
+    } catch (err) { return null; }
 }
 
-// --- SYSTEM PROMPT ---
 const getSystemInstruction = (products) => {
   const productCatalogStr = products.map(p => `[${p.category}] ${p.name}: KSh ${p.priceRange.min}-${p.priceRange.max}`).join('\n');
   const learnedKnowledge = knowledgeBase.map(f => `- ${f}`).join('\n');
-
-  return `You are "John", a human sales expert at JohnTech Vendors Ltd. 
-  
-  *** HUMAN BEHAVIOR RULES ***
-  1. **BREVITY:** Responses MUST be under 20 words. No info-dumping.
-  2. **ONE STEP AT A TIME:** Only ask one question per reply. Mimic a real chat.
-  3. **CONSULTATIVE:** If they ask for "Water Machine", ask for their water source (Borehole vs Kanjo) BEFORE giving price.
-  4. **MIRRORING:** Reply in the same language style as the user (Sheng, Swahili, or English).
-  5. **ESCALATION:** When a user is ready to pay, call 'escalateToAdmin'. Say something like: "Let me check the exact stock on that for you real quick, just a second..."
-  
-  *** THINGS YOU LEARNED FROM ADMIN RECENTLY ***
-  ${learnedKnowledge || "Follow standard catalog procedures."}
-
-  *** CATALOG ***
-  ${productCatalogStr}`;
+  return `You are "John", a human sales expert at JohnTech Vendors Ltd. Keep it brief (<20 words). One question at a time. \nCatalog:\n${productCatalogStr}\nKnowledge:\n${learnedKnowledge}`;
 };
 
-// --- ROUTES ---
-app.post('/api/analyze-leads', async (req, res) => {
-  const result = await performLeadAnalysis(req.body.force || false);
-  res.json(result || leadsData);
+// --- API ROUTES ---
+
+// Products
+app.get('/api/products', (req, res) => res.json(productInventory));
+app.post('/api/product', async (req, res) => {
+    productInventory.push(req.body);
+    await saveInventory();
+    res.json({ success: true });
+});
+app.put('/api/product/:id', async (req, res) => {
+    productInventory = productInventory.map(p => p.id === req.params.id ? req.body : p);
+    await saveInventory();
+    res.json({ success: true });
+});
+app.delete('/api/product/:id', async (req, res) => {
+    productInventory = productInventory.filter(p => p.id !== req.params.id);
+    await saveInventory();
+    res.json({ success: true });
 });
 
+// Chats & Messaging
+app.get('/api/chats', (req, res) => res.json(Object.values(chatSessions).sort((a,b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime))));
 app.post('/api/send-message', async (req, res) => {
     const { to, text } = req.body;
     try {
-        const sessionId = to;
-        const msgId = `admin_${Date.now()}`;
-        
-        if (chatSessions[sessionId]) {
-            chatSessions[sessionId].messages.push({ 
-                id: msgId, 
-                sender: 'bot', 
-                text, 
-                timestamp: new Date() 
-            });
-            chatSessions[sessionId].lastMessage = text;
-            chatSessions[sessionId].lastMessageTime = new Date();
-            chatSessions[sessionId].unreadCount = 0;
+        if (chatSessions[to]) {
+            chatSessions[to].messages.push({ id: `admin_${Date.now()}`, sender: 'bot', text, timestamp: new Date() });
+            chatSessions[to].lastMessage = text;
+            chatSessions[to].lastMessageTime = new Date();
             await saveChats();
         }
-
-        await axios.post(`https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`, 
-            { messaging_product: 'whatsapp', to, type: 'text', text: { body: text } }, 
-            { headers: { Authorization: `Bearer ${serverConfig.accessToken}` } }
-        );
+        await axios.post(`https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`, { messaging_product: 'whatsapp', to, type: 'text', text: { body: text } }, { headers: { Authorization: `Bearer ${serverConfig.accessToken}` } });
         res.json({ success: true });
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-app.get('/api/chats', (req, res) => {
-    const chats = Object.values(chatSessions).sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
-    res.json(chats);
+app.post('/api/chat/:id/toggle-bot', async (req, res) => {
+    if (chatSessions[req.params.id]) {
+        chatSessions[req.params.id].botActive = req.body.active;
+        await saveChats();
+        res.json({ success: true });
+    } else res.status(404).json({ error: 'Not found' });
 });
 
-// --- WEBHOOK LOGIC ---
+// Settings
+app.get('/api/settings', (req, res) => {
+    const { accessToken, ...safeConfig } = serverConfig;
+    res.json(safeConfig);
+});
+app.post('/api/settings', async (req, res) => {
+    serverConfig = { ...serverConfig, ...req.body };
+    await saveServerConfig();
+    res.json({ success: true });
+});
+app.post('/api/verify-meta-config', (req, res) => res.json({ success: true, message: 'Verified' }));
+
+// Lead Analysis
+app.post('/api/analyze-leads', async (req, res) => res.json(await performLeadAnalysis(req.body.force)));
+
+// --- WEBHOOK ---
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
   try {
@@ -247,94 +184,35 @@ app.post('/webhook', async (req, res) => {
     const apiKey = getApiKey();
 
     if (!chatSessions[sender]) chatSessions[sender] = { id: sender, contactName: msg.contacts?.[0]?.profile?.name || sender, messages: [], lastMessage: '', lastMessageTime: new Date(), botActive: true };
-    const incoming = { id: msg.id, sender: 'user', timestamp: new Date(), type: 'text', text: msg.text?.body || 'Attachment' };
-    chatSessions[sender].messages.push(incoming);
-    chatSessions[sender].lastMessage = incoming.text;
+    chatSessions[sender].messages.push({ id: msg.id, sender: 'user', timestamp: new Date(), text: msg.text?.body || 'Attachment' });
+    chatSessions[sender].lastMessage = msg.text?.body || 'Attachment';
     chatSessions[sender].lastMessageTime = new Date();
     await saveChats();
 
     if (!chatSessions[sender].botActive || !apiKey) return;
 
     const ai = new GoogleGenAI({ apiKey });
-    const history = chatSessions[sender].messages.slice(-15).map(m => ({
-        role: m.sender === 'user' ? 'user' : 'model',
-        parts: [{ text: m.text }]
-    }));
-
     const chat = ai.chats.create({
         model: MODEL_NAME,
-        config: {
-            systemInstruction: getSystemInstruction(productInventory),
-            tools: [{ functionDeclarations: [
-                { name: 'displayProduct', parameters: { type: Type.OBJECT, properties: { productId: { type: Type.STRING } } } },
-                { name: 'escalateToAdmin', parameters: { type: Type.OBJECT, properties: { reason: { type: Type.STRING } } } }
-            ] }],
-            temperature: 0.6
-        },
-        history: history.slice(0, -1)
+        config: { systemInstruction: getSystemInstruction(productInventory), temperature: 0.6 }
     });
+    const result = await chat.sendMessage({ message: msg.text?.body || "Hello" });
+    const textRes = result.text;
 
-    const result = await chat.sendMessage({ message: { parts: [{ text: incoming.text }] } });
-    const content = result.candidates[0].content;
-    let textRes = content.parts.find(p => p.text)?.text || "";
-    const fCalls = content.parts.filter(p => p.functionCall);
-
-    let images = [];
-    let isLocking = false;
-
-    if (fCalls.length > 0) {
-        for (const fc of fCalls) {
-            if (fc.name === 'displayProduct') {
-                const prod = productInventory.find(p => p.id === fc.args.productId);
-                if (prod?.images) images = prod.images.slice(0, 3);
-            }
-            if (fc.name === 'escalateToAdmin') {
-                isLocking = true;
-                textRes = "Let me check the exact stock and details on that for you real quick, one moment...";
-            }
-        }
-    }
-
-    if (images.length > 0) {
-        for (const img of images) {
-            await axios.post(`https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`, 
-                { messaging_product: 'whatsapp', to: sender, type: 'image', image: { link: img } }, 
-                { headers: { Authorization: `Bearer ${serverConfig.accessToken}` } }
-            );
-        }
-    }
-
-    if (textRes) {
-        await axios.post(`https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`, 
-            { messaging_product: 'whatsapp', to: sender, type: 'text', text: { body: textRes.replace(/\*/g, '') } }, 
-            { headers: { Authorization: `Bearer ${serverConfig.accessToken}` } }
-        );
-        chatSessions[sender].messages.push({ sender: 'bot', text: textRes, timestamp: new Date() });
-        await saveChats();
-    }
-
-    if (isLocking) {
-        chatSessions[sender].botActive = false;
-        chatSessions[sender].isEscalated = true;
-        await saveChats();
-    }
-  } catch (err) { console.error("Webhook Error:", err); }
+    await axios.post(`https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`, { messaging_product: 'whatsapp', to: sender, type: 'text', text: { body: textRes } }, { headers: { Authorization: `Bearer ${serverConfig.accessToken}` } });
+    chatSessions[sender].messages.push({ sender: 'bot', text: textRes, timestamp: new Date() });
+    await saveChats();
+  } catch (err) {}
 });
 
-// --- MIDNIGHT SCHEDULER ---
-setInterval(async () => {
-    const now = new Date();
-    const dateStr = now.toISOString().split('T')[0];
-    
-    // Check if it's 00:00 and we haven't run today
-    if (now.getHours() === 0 && lastDailyRunDate !== dateStr) {
-        lastDailyRunDate = dateStr;
-        console.log(`🕛 Midnight Maintenance Started for ${dateStr}...`);
-        await performSelfLearning();
-        await performLeadAnalysis(false);
-    }
-}, 60000); 
+// --- STATIC FILES (Crucial for fix) ---
+app.use(express.static(path.join(__dirname, 'dist')));
 
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+// --- START ---
 loadAll().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 JohnTech Bot Online on ${PORT}`));
 });
