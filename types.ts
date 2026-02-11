@@ -8,25 +8,26 @@ export type ProductCategory =
   | 'Bottle Rinser' 
   | 'Packaging Table' 
   | 'Cold Water Vending' 
-  | 'Ultra Filtration';
+  | 'Ultra Filtration'
+  | 'General';
 
 export interface Product {
   id: string;
   category: ProductCategory;
-  name: string; // Generated automatically or manual
+  name: string;
   priceRange: {
     min: number;
     max: number;
   };
   description: string;
-  images: string[]; // Base64 strings
+  images: string[];
   specs: {
-    capacity?: string; // Milk, Oil, RO, Pasteurizer, UF, Bottle Rinser
-    material?: 'Stainless Steel' | 'Non-Stainless Steel'; // Oil, Packaging Table
-    operationType?: 'Automatic' | 'Manual'; // Water
-    taps?: '1 Tap' | '2 Taps'; // Water, Cold Water
-    mountType?: 'Floor Standing' | 'Wall Mount'; // Water
-    dimensions?: string; // Packaging Table
+    capacity?: string;
+    material?: 'Stainless Steel' | 'Non-Stainless Steel';
+    operationType?: 'Automatic' | 'Manual';
+    taps?: '1 Tap' | '2 Taps';
+    mountType?: 'Floor Standing' | 'Wall Mount';
+    dimensions?: string;
     [key: string]: any;
   };
 }
@@ -35,9 +36,9 @@ export interface Message {
   id: string;
   text: string;
   sender: 'user' | 'bot' | 'system';
-  timestamp: Date | string; // Allow string date from JSON
+  timestamp: Date | string;
   type: 'text' | 'image'; 
-  image?: string; // Single image url/base64
+  image?: string;
 }
 
 export interface ChatSession {
@@ -47,20 +48,22 @@ export interface ChatSession {
   lastMessage: string;
   lastMessageTime: Date | string;
   unreadCount: number;
-  isEscalated?: boolean; // True if Admin attention is needed (Red Flag)
-  botActive?: boolean;   // True if Bot is handling, False if locked for Admin
+  isEscalated?: boolean;
+  botActive?: boolean;
+  lastAnalyzedTime?: string;
 }
 
 export interface AnalyzedLead {
   phone: string;
   name: string;
   reason: string;
+  isSerious: boolean;
+  category: string;
 }
 
 export interface LeadsData {
-  serious: AnalyzedLead[];
-  stalled: AnalyzedLead[];
-  visiting: AnalyzedLead[];
-  followUp: AnalyzedLead[];
+  categories: {
+    [category: string]: AnalyzedLead[];
+  };
   lastUpdated?: string;
 }

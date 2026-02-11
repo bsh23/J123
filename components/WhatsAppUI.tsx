@@ -1,16 +1,17 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Product, Message, ChatSession, LeadsData, AnalyzedLead } from '../types';
 import { 
   MoreVertical, Search, Paperclip, Smile, 
-  Send, CheckCheck, CircleDashed, ArrowLeft, Lock, Unlock, Bot, X, Trash2,
-  Sparkles, MessageSquare, PhoneCall, DollarSign, MapPin, Loader2, RefreshCw
+  Send, CheckCheck, ArrowLeft, Lock, Bot, X, Trash2,
+  Sparkles, MessageSquare, PhoneCall, RefreshCw, ChevronRight, AlertCircle
 } from 'lucide-react';
 
 interface WhatsAppUIProps {
   products: Product[];
   openCatalog: () => void;
   openSettings: () => void;
-  openAnalysis: () => void; // Kept for interface compatibility but logic moved internally
+  openAnalysis: () => void;
 }
 
 const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSettings }) => {
@@ -18,40 +19,25 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
-  const [attachedImage, setAttachedImage] = useState<string | null>(null);
-  
-  // Sidebar State
   const [sidebarView, setSidebarView] = useState<'chats' | 'leads'>('chats');
   const [leadsData, setLeadsData] = useState<LeadsData | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [expandedCat, setExpandedCat] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // --- POLLING ---
   useEffect(() => {
     const fetchChats = async () => {
-      try {
-        const res = await fetch('/api/chats');
-        if (res.ok) {
-            const data = await res.json();
-            setChatSessions(data);
-        }
-      } catch (err) {
-        console.error("Polling error:", err);
-      }
+      const res = await fetch('/api/chats');
+      if (res.ok) setChatSessions(await res.json());
     };
-
     fetchChats();
-    const interval = setInterval(fetchChats, 3000); 
-    return () => clearInterval(interval);
+    const int = setInterval(fetchChats, 4000);
+    return () => clearInterval(int);
   }, []);
 
-  // Fetch Leads on Mount or Tab Switch
   useEffect(() => {
-    if (sidebarView === 'leads' && !leadsData) {
-        fetchLeads(false); // Fetch cached
-    }
+    if (sidebarView === 'leads') fetchLeads(false);
   }, [sidebarView]);
 
   const fetchLeads = async (force: boolean) => {
@@ -62,527 +48,146 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ force })
         });
-        if (res.ok) {
-            const data = await res.json();
-            setLeadsData(data);
-        }
-    } catch (err) {
-        console.error("Analysis failed", err);
-    } finally {
-        setIsAnalyzing(false);
-    }
-  };
-
-  const selectedChat = chatSessions.find(c => c.id === selectedChatId);
-  const isEscalated = selectedChat?.isEscalated || false;
-  const isBotActive = selectedChat?.botActive !== false; // Default true if undefined
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    if (selectedChatId) {
-      scrollToBottom();
-    }
-  }, [selectedChatId]);
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        if (ev.target?.result) setAttachedImage(ev.target.result as string);
-      };
-      reader.readAsDataURL(e.target.files[0]);
-    }
-  };
-
-  const clearAttachment = () => {
-    setAttachedImage(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+        if (res.ok) setLeadsData(await res.json());
+    } finally { setIsAnalyzing(false); }
   };
 
   const handleSendMessage = async () => {
-    if ((!inputText.trim() && !attachedImage) || !selectedChatId) return;
-    
+    if (!inputText.trim() || !selectedChatId) return;
     setIsSending(true);
-    const textToSend = inputText.trim();
-    const imageToSend = attachedImage;
-
-    try {
-        const res = await fetch('/api/send-message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                to: selectedChatId,
-                text: textToSend,
-                image: imageToSend
-            })
-        });
-
-        if (res.ok) {
-            setInputText('');
-            clearAttachment();
-            
-            setChatSessions(prev => prev.map(c => {
-                if (c.id === selectedChatId) {
-                    const newMsg: any = { 
-                        id: Date.now().toString(), 
-                        text: textToSend, 
-                        sender: 'bot', 
-                        type: imageToSend ? 'image' : 'text', 
-                        timestamp: new Date() 
-                    };
-                    if (imageToSend) newMsg.image = imageToSend;
-
-                    return {
-                        ...c,
-                        messages: [...c.messages, newMsg]
-                    };
-                }
-                return c;
-            }));
-            
-            setTimeout(scrollToBottom, 100);
-        } else {
-            alert("Failed to send message via WhatsApp API.");
-        }
-    } catch (err) {
-        console.error("Send failed", err);
-    } finally {
-        setIsSending(false);
-    }
+    const res = await fetch('/api/send-message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: selectedChatId, text: inputText })
+    });
+    if (res.ok) setInputText('');
+    setIsSending(false);
   };
 
-  const toggleBot = async () => {
-    if (!selectedChatId) return;
-    const newStatus = !isBotActive;
-    
-    try {
-        const res = await fetch(`/api/chat/${selectedChatId}/toggle-bot`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ active: newStatus })
-        });
-        
-        if (res.ok) {
-            setChatSessions(prev => prev.map(c => {
-                if (c.id === selectedChatId) {
-                    return { ...c, botActive: newStatus, isEscalated: newStatus ? false : c.isEscalated };
-                }
-                return c;
-            }));
-        }
-    } catch (err) {
-        console.error("Toggle failed", err);
-    }
-  };
-
-  const handleDeleteChat = async () => {
-    if (!selectedChatId) return;
-    if (!confirm("Are you sure you want to delete this conversation permanently? This action cannot be undone.")) return;
-
-    try {
-        const res = await fetch(`/api/chat/${selectedChatId}`, { method: 'DELETE' });
-        if (res.ok) {
-            setChatSessions(prev => prev.filter(c => c.id !== selectedChatId));
-            setSelectedChatId(null);
-        } else {
-            alert("Failed to delete chat.");
-        }
-    } catch (err) {
-        console.error("Delete failed", err);
-        alert("Error connecting to server.");
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') handleSendMessage();
-  };
-
-  const formatTime = (dateInput: Date | string) => {
-    const date = new Date(dateInput);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
-
-  const handleLeadClick = (phone: string) => {
-      setSelectedChatId(phone);
-  };
-
-  const renderLeadCategory = (title: string, leads: AnalyzedLead[], icon: React.ReactNode, bgColor: string, textColor: string) => {
-      if (!leads || leads.length === 0) return null;
-      return (
-          <div className="mb-4">
-              <div className={`flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider ${bgColor} ${textColor}`}>
-                  {icon} {title} ({leads.length})
-              </div>
-              {leads.map((lead, i) => (
-                  <div 
-                    key={i} 
-                    onClick={() => handleLeadClick(lead.phone)}
-                    className="px-4 py-3 border-b border-gray-100 hover:bg-gray-50 cursor-pointer group"
-                  >
-                      <div className="flex justify-between items-start">
-                          <h4 className="font-semibold text-gray-800 text-sm">{lead.name}</h4>
-                          <span className="text-[10px] text-gray-400 font-mono">{lead.phone}</span>
-                      </div>
-                      <p className="text-xs text-gray-600 mt-1 italic leading-relaxed group-hover:text-gray-900 transition-colors">
-                          "{lead.reason}"
-                      </p>
-                  </div>
-              ))}
-          </div>
-      );
-  };
+  const selectedChat = chatSessions.find(c => c.id === selectedChatId);
 
   return (
-    <div className="flex h-full w-full max-w-[1600px] mx-auto shadow-2xl overflow-hidden bg-[#f0f2f5] border border-gray-300/50 rounded-lg">
+    <div className="flex h-full w-full max-w-[1600px] mx-auto shadow-2xl overflow-hidden bg-[#f0f2f5] rounded-lg">
       
       {/* Sidebar */}
-      <div className={`
-        w-full md:w-[35%] lg:w-[30%] bg-white border-r border-gray-300 flex flex-col
-        ${selectedChatId ? 'hidden md:flex' : 'flex'}
-      `}>
-        {/* Sidebar Header */}
-        <div className="bg-[#f0f2f5] flex flex-col flex-shrink-0 border-b border-gray-200">
-            {/* Top Bar */}
-            <div className="h-16 px-4 flex items-center justify-between">
-                <div className="w-10 h-10 rounded-full bg-gray-300 overflow-hidden cursor-pointer border border-gray-200">
-                    <img src="https://i.ibb.co/0yVkM0Zr/jtv.png" alt="Admin" className="w-full h-full object-cover" />
-                </div>
+      <div className={`w-full md:w-[30%] bg-white border-r flex flex-col ${selectedChatId ? 'hidden md:flex' : 'flex'}`}>
+        <div className="bg-[#f0f2f5] p-4 flex flex-col gap-3 border-b">
+            <div className="flex justify-between items-center">
+                <img src="https://i.ibb.co/0yVkM0Zr/jtv.png" className="w-10 h-10 rounded-full" />
                 <div className="flex gap-4 text-gray-500">
-                    <div className="relative group">
-                    <button className="hover:bg-gray-200 rounded-full p-1 transition-colors">
-                        <MoreVertical size={24} />
-                    </button>
-                    <div className="absolute right-0 top-10 w-56 bg-white shadow-xl rounded py-2 hidden group-hover:block z-50 border border-gray-100">
-                        <div className="px-4 py-3 hover:bg-gray-100 cursor-pointer text-gray-700 text-sm" onClick={openCatalog}>
-                        Add Products
-                        </div>
-                        <div className="px-4 py-3 hover:bg-gray-100 cursor-pointer text-gray-700 text-sm" onClick={openSettings}>
-                        Settings
-                        </div>
-                    </div>
-                    </div>
+                    <button onClick={openCatalog} title="Inventory"><MoreVertical size={22} /></button>
                 </div>
             </div>
-
-            {/* View Tabs */}
-            <div className="flex px-2 pb-2 gap-2">
+            <div className="flex gap-2">
                 <button 
                     onClick={() => setSidebarView('chats')}
-                    className={`flex-1 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-all
-                    ${sidebarView === 'chats' ? 'bg-white shadow text-[#008069]' : 'text-gray-500 hover:bg-gray-200'}`}
+                    className={`flex-1 py-2 rounded text-sm font-bold ${sidebarView === 'chats' ? 'bg-white text-[#008069] shadow-sm' : 'text-gray-500'}`}
                 >
-                    <MessageSquare size={16} /> Chats
+                    Chats
                 </button>
                 <button 
                     onClick={() => setSidebarView('leads')}
-                    className={`flex-1 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-all
-                    ${sidebarView === 'leads' ? 'bg-white shadow text-[#008069]' : 'text-gray-500 hover:bg-gray-200'}`}
+                    className={`flex-1 py-2 rounded text-sm font-bold ${sidebarView === 'leads' ? 'bg-white text-[#008069] shadow-sm' : 'text-gray-500'}`}
                 >
-                    <Sparkles size={16} /> AI Leads
+                    Leads
                 </button>
             </div>
         </div>
 
-        {/* Sidebar Content */}
-        <div className="flex-1 overflow-y-auto bg-white">
-            
-            {/* CHATS VIEW */}
-            {sidebarView === 'chats' && (
-                <>
-                {/* Search */}
-                <div className="p-2 border-b border-gray-200 bg-white sticky top-0 z-10">
-                    <div className="bg-[#f0f2f5] rounded-lg h-9 flex items-center px-4 gap-4">
-                        <Search size={18} className="text-gray-500" />
-                        <input type="text" placeholder="Search chats" className="bg-transparent w-full text-sm focus:outline-none placeholder-gray-500 text-gray-700" />
-                    </div>
-                </div>
-
-                {/* List */}
-                {chatSessions.length === 0 ? (
-                    <div className="p-8 text-center text-gray-400 text-sm">
-                        <p>No active conversations yet.</p>
-                    </div>
-                ) : (
-                    chatSessions.map(chat => (
+        <div className="flex-1 overflow-y-auto">
+            {sidebarView === 'chats' ? (
+                chatSessions.map(chat => (
                     <div 
-                        key={chat.id}
+                        key={chat.id} 
                         onClick={() => setSelectedChatId(chat.id)}
-                        className={`flex items-center gap-3 p-3 cursor-pointer border-b border-gray-100 transition-colors relative
-                        ${selectedChatId === chat.id ? 'bg-[#f0f2f5]' : 'hover:bg-[#f5f6f6]'}
-                        ${(chat.isEscalated || chat.botActive === false) ? 'bg-red-50 hover:bg-red-100 border-l-4 border-l-red-600' : ''}
-                        `}
+                        className={`p-3 border-b flex gap-3 cursor-pointer hover:bg-gray-50 ${selectedChatId === chat.id ? 'bg-gray-100' : ''} ${!chat.botActive ? 'bg-red-50' : ''}`}
                     >
-                        <div className="w-12 h-12 rounded-full overflow-hidden flex-shrink-0 border border-gray-100 bg-gray-200 flex items-center justify-center relative">
-                        <span className="text-gray-500 font-bold text-lg">{chat.contactName.charAt(0)}</span>
-                        {(chat.isEscalated || chat.botActive === false) && (
-                            <div className="absolute bottom-0 right-0 w-4 h-4 bg-red-600 rounded-full border-2 border-white flex items-center justify-center">
-                                <Lock size={10} className="text-white" />
-                            </div>
-                        )}
+                        <div className="w-12 h-12 bg-gray-200 rounded-full flex items-center justify-center font-bold text-gray-500 relative">
+                            {chat.contactName[0]}
+                            {!chat.botActive && <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-600 rounded-full flex items-center justify-center text-[8px] text-white"><Lock size={8} /></div>}
                         </div>
                         <div className="flex-1 min-w-0">
-                        <div className="flex justify-between items-baseline">
-                            <h3 className={`font-medium truncate ${chat.isEscalated ? 'text-red-700 font-bold' : 'text-gray-900'}`}>
-                                {chat.contactName}
-                            </h3>
-                            <span className="text-xs text-gray-500">{formatTime(chat.lastMessageTime)}</span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                            <p className="text-sm text-gray-500 truncate flex items-center gap-1 max-w-[70%]">
-                            {chat.messages[chat.messages.length-1]?.text || 'Photo'}
-                            </p>
-                            {(chat.isEscalated || chat.botActive === false) && (
-                            <span className="text-[10px] bg-red-600 text-white px-2 py-1 rounded-full font-bold shadow-sm animate-pulse">
-                                ACTION
-                            </span>
-                            )}
-                        </div>
+                            <h4 className={`text-sm font-semibold truncate ${!chat.botActive ? 'text-red-700' : 'text-gray-800'}`}>{chat.contactName}</h4>
+                            <p className="text-xs text-gray-500 truncate">{chat.lastMessage}</p>
                         </div>
                     </div>
-                    ))
-                )}
-                </>
-            )}
-
-            {/* LEADS VIEW */}
-            {sidebarView === 'leads' && (
-                <div className="min-h-full bg-white relative">
-                    <div className="p-4 bg-gray-50 border-b border-gray-200 sticky top-0 z-10 flex justify-between items-center">
-                         <div>
-                            <h3 className="text-sm font-bold text-gray-700">AI Opportunity Scanner</h3>
-                            <p className="text-xs text-gray-500">
-                                {leadsData?.lastUpdated ? `Updated: ${new Date(leadsData.lastUpdated).toLocaleTimeString()}` : 'No scan yet'}
-                            </p>
-                         </div>
-                         <button 
-                            onClick={() => fetchLeads(true)}
-                            disabled={isAnalyzing}
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold text-white transition-all
-                                ${isAnalyzing ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#008069] hover:bg-[#006d59] shadow-sm'}
-                            `}
-                         >
-                            <RefreshCw size={14} className={isAnalyzing ? 'animate-spin' : ''} />
-                            {isAnalyzing ? 'Scanning...' : 'Scan Now'}
-                         </button>
+                ))
+            ) : (
+                <div className="bg-white">
+                    <div className="p-3 border-b flex justify-between items-center bg-gray-50">
+                        <span className="text-xs font-bold text-gray-500">Categorized Opportunities</span>
+                        <button onClick={() => fetchLeads(true)} className="text-[#008069]"><RefreshCw size={14} className={isAnalyzing ? 'animate-spin' : ''} /></button>
                     </div>
-
-                    {isAnalyzing && !leadsData && (
-                        <div className="p-8 flex flex-col items-center justify-center text-gray-400">
-                            <Loader2 size={32} className="animate-spin mb-2" />
-                            <p className="text-sm">Analyzing conversations...</p>
-                        </div>
-                    )}
-
-                    {!isAnalyzing && leadsData && (
-                        <div className="pb-10 animate-fade-in">
-                            {(!leadsData.serious.length && !leadsData.stalled.length && !leadsData.visiting.length && !leadsData.followUp.length) && (
-                                <div className="p-8 text-center text-gray-400 text-sm">
-                                    No leads found in recent chats.
-                                </div>
-                            )}
-
-                            {renderLeadCategory('Call Immediately', leadsData.serious, <PhoneCall size={14} />, 'bg-red-100', 'text-red-700')}
-                            {renderLeadCategory('Price Negotiation', leadsData.stalled, <DollarSign size={14} />, 'bg-orange-100', 'text-orange-700')}
-                            {renderLeadCategory('Visiting Soon', leadsData.visiting, <MapPin size={14} />, 'bg-blue-100', 'text-blue-700')}
-                            {renderLeadCategory('Follow Up', leadsData.followUp, <MessageSquare size={14} />, 'bg-gray-100', 'text-gray-700')}
-                        </div>
-                    )}
+                    {leadsData && Object.entries(leadsData.categories).map(([cat, leads]) => {
+                        // Fix: Cast 'leads' to AnalyzedLead[] to avoid TS unknown errors
+                        const typedLeads = leads as AnalyzedLead[];
+                        return (
+                            <div key={cat} className="border-b">
+                                <button 
+                                    onClick={() => setExpandedCat(expandedCat === cat ? null : cat)}
+                                    className="w-full p-3 flex justify-between items-center hover:bg-gray-50"
+                                >
+                                    <span className="text-sm font-bold text-gray-700">{cat} ({typedLeads.length})</span>
+                                    <ChevronRight size={16} className={`transition-transform ${expandedCat === cat ? 'rotate-90' : ''}`} />
+                                </button>
+                                {expandedCat === cat && typedLeads.map(l => (
+                                    <div 
+                                        key={l.phone} 
+                                        onClick={() => setSelectedChatId(l.phone)}
+                                        className={`p-3 pl-6 border-t cursor-pointer hover:bg-green-50 flex flex-col gap-1 ${l.isSerious ? 'bg-yellow-50 border-l-4 border-l-yellow-400' : ''}`}
+                                    >
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-xs font-bold text-gray-800">{l.name}</span>
+                                            {l.isSerious && <span className="text-[9px] bg-red-600 text-white px-1.5 rounded font-black flex items-center gap-1"><AlertCircle size={8} /> SERIOUS</span>}
+                                        </div>
+                                        <p className="text-[11px] text-gray-600 italic">"{l.reason}"</p>
+                                    </div>
+                                ))}
+                            </div>
+                        );
+                    })}
                 </div>
             )}
         </div>
       </div>
 
-      {/* Main Chat Area */}
-      <div className={`
-        flex-1 flex flex-col min-w-0 bg-[#efeae2] h-full relative
-        ${selectedChatId ? 'flex' : 'hidden md:flex'}
-      `}>
-        
-        {selectedChat && selectedChatId ? (
-          <>
-            {/* Chat Header */}
-            <div className={`
-              h-16 px-4 flex items-center justify-between border-b border-gray-200 z-30 flex-shrink-0 transition-colors
-              ${(!isBotActive || isEscalated) ? 'bg-red-100 border-b-2 border-red-500' : 'bg-[#f0f2f5]'}
-            `}>
-              <div className="flex items-center gap-2 md:gap-4">
-                <button onClick={() => setSelectedChatId(null)} className="md:hidden text-gray-600 mr-1">
-                  <ArrowLeft size={24} />
-                </button>
-                
-                <div className="w-10 h-10 rounded-full overflow-hidden bg-gray-300 flex items-center justify-center relative">
-                  <span className="text-lg font-bold text-gray-600">{selectedChat.contactName.charAt(0)}</span>
+      {/* Chat Area */}
+      <div className={`flex-1 flex flex-col bg-[#efeae2] ${selectedChatId ? 'flex' : 'hidden md:flex'}`}>
+        {selectedChat ? (
+            <>
+                <div className={`h-16 px-4 flex items-center justify-between border-b ${!selectedChat.botActive ? 'bg-red-100' : 'bg-[#f0f2f5]'}`}>
+                    <div className="flex items-center gap-3">
+                        <button onClick={() => setSelectedChatId(null)} className="md:hidden"><ArrowLeft size={24} /></button>
+                        <h3 className="font-bold text-gray-800">{selectedChat.contactName}</h3>
+                    </div>
+                    {!selectedChat.botActive && <span className="text-xs font-bold text-red-600 animate-pulse">LOCKED FOR ADMIN</span>}
                 </div>
-                <div className="flex flex-col cursor-pointer">
-                  <span className="text-gray-900 font-medium text-base truncate max-w-[150px] md:max-w-none">
-                    {selectedChat.contactName}
-                  </span>
-                  <span className="text-xs text-gray-500">
-                    +{selectedChat.id} • 
-                    {isEscalated ? <span className="text-red-600 font-bold ml-1">NEEDS ADMIN</span> : ' Online'}
-                  </span>
-                </div>
-              </div>
-
-              {/* ACTION BUTTONS */}
-              <div className="flex items-center gap-4">
-                 <button 
-                   onClick={toggleBot}
-                   className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-semibold transition-colors
-                     ${isBotActive 
-                       ? 'bg-green-100 text-green-700 hover:bg-green-200' 
-                       : 'bg-red-600 text-white hover:bg-red-700 shadow-md'}
-                   `}
-                 >
-                   {isBotActive ? (
-                     <><Bot size={16} /> Bot Active</>
-                   ) : (
-                     <><Lock size={16} /> LOCKED</>
-                   )}
-                 </button>
-                 {!isBotActive && (
-                    <button onClick={toggleBot} className="hidden md:block text-sm underline text-blue-600 font-semibold">
-                        Resume Bot
-                    </button>
-                 )}
-                 <div className="h-6 w-px bg-gray-300 mx-2"></div>
-                 <button 
-                   onClick={handleDeleteChat}
-                   className="text-gray-500 hover:text-red-600 transition-colors p-2 rounded-full hover:bg-red-50"
-                   title="Delete Chat"
-                 >
-                    <Trash2 size={22} />
-                 </button>
-              </div>
-            </div>
-
-            {/* Mobile LOCKED Banner - Highly Visible */}
-            {(!isBotActive || isEscalated) && (
-                <div className="bg-red-600 text-white p-3 text-center text-sm font-bold shadow-md z-20 flex justify-between items-center px-6 animate-pulse">
-                    <span className="flex items-center gap-2"><Lock size={16} /> ADMIN ACTION NEEDED</span>
-                    <button onClick={toggleBot} className="bg-white text-red-600 px-3 py-1 rounded-full text-xs uppercase">
-                        Unlock
-                    </button>
-                </div>
-            )}
-
-            {/* Messages Area */}
-            <div className="flex-1 overflow-y-auto p-4 whatsapp-bg relative">
-              <div className="flex flex-col gap-2">
-                
-                {/* Status Banners */}
-                <div className="flex justify-center my-4">
-                  <div className="bg-[#fff5c4] text-xs text-gray-800 px-3 py-1.5 rounded-lg shadow-sm text-center">
-                     Messages synced via WhatsApp Business API.
-                  </div>
-                </div>
-
-                {/* Messages */}
-                {selectedChat.messages.map((msg, idx) => (
-                  <div 
-                    key={idx} 
-                    className={`flex animate-fade-in ${msg.sender === 'user' ? 'justify-start' : 'justify-end'}`}
-                  >
-                    <div 
-                        className={`
-                          max-w-[85%] md:max-w-[65%] rounded-lg px-2 relative shadow-sm text-sm
-                          ${msg.sender === 'user' 
-                            ? 'bg-white rounded-tl-none' 
-                            : 'bg-[#d9fdd3] rounded-tr-none'}
-                        `}
-                      >
-                         {/* Image */}
-                         {msg.type === 'image' && msg.image && (
-                           <div className="p-1">
-                              <img src={msg.image} alt="Media" className="rounded-lg w-full max-w-[300px] object-cover mb-1" />
-                           </div>
-                         )}
-
-                        {/* Text */}
-                        {msg.text && (
-                          <div className="pt-2 pl-1 pr-1 pb-1 text-gray-900 whitespace-pre-wrap leading-relaxed break-words relative z-0">
-                            {msg.text}
-                            <span className="inline-block w-16 h-3 select-none pointer-events-none align-middle ml-1"></span>
-                          </div>
-                        )}
-
-                        {/* Timestamp */}
-                        <div className="absolute bottom-1 right-2 flex items-center gap-1 z-10 h-4">
-                          <span className="text-[11px] text-gray-500 min-w-[45px] text-right leading-none">
-                            {formatTime(msg.timestamp)}
-                            {msg.sender !== 'user' && <CheckCheck size={14} className="text-blue-500 ml-1 inline" />}
-                          </span>
+                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
+                    {selectedChat.messages.map((m, i) => (
+                        <div key={i} className={`flex ${m.sender === 'user' ? 'justify-start' : 'justify-end'}`}>
+                            <div className={`max-w-[80%] p-2 rounded shadow-sm text-sm ${m.sender === 'user' ? 'bg-white' : 'bg-[#d9fdd3]'}`}>
+                                {m.text}
+                            </div>
                         </div>
-                      </div>
-                  </div>
-                ))}
-                
-                <div ref={messagesEndRef} />
-              </div>
-            </div>
-
-            {/* Input Area */}
-            <div className="h-auto min-h-[64px] bg-[#f0f2f5] px-4 py-2 flex flex-col z-10 flex-shrink-0">
-                {/* Image Preview */}
-                {attachedImage && (
-                  <div className="bg-white p-2 mb-2 rounded-lg shadow-sm border border-gray-200 flex items-center gap-4 self-start relative animate-fade-in">
-                    <img src={attachedImage} alt="Attachment" className="h-16 w-16 object-cover rounded" />
-                    <span className="text-xs text-gray-500 font-medium">Image attached</span>
-                    <button 
-                      onClick={clearAttachment}
-                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5 shadow hover:bg-red-600"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                )}
-                
-                <div className="flex items-center gap-2 w-full">
-                  <div className="flex gap-4">
-                    <Smile size={26} className="text-gray-500 cursor-pointer" />
-                    <button onClick={() => fileInputRef.current?.click()}>
-                        <Paperclip size={24} className={`cursor-pointer ${attachedImage ? 'text-[#008069]' : 'text-gray-500'}`} />
-                    </button>
-                    <input 
-                      type="file" 
-                      ref={fileInputRef} 
-                      className="hidden" 
-                      accept="image/*" 
-                      onChange={handleFileSelect} 
-                    />
-                  </div>
-                  
-                  <div className="flex-1 bg-white rounded-lg flex items-center min-h-[40px] border border-white">
-                    <input
-                      type="text"
-                      className="w-full py-2 px-4 rounded-lg border-none focus:outline-none text-black placeholder-gray-500 bg-white"
-                      placeholder={isBotActive ? (attachedImage ? "Add a caption..." : "Type a message...") : "Bot Locked. Type to reply manually..."}
-                      value={inputText}
-                      onChange={(e) => setInputText(e.target.value)}
-                      onKeyDown={handleKeyDown}
-                      disabled={isSending}
-                    />
-                  </div>
-                  <div className="">
-                      <button onClick={handleSendMessage} disabled={isSending} className={`p-2 ${isSending ? 'text-gray-400' : 'text-[#008069]'}`}>
-                          <Send size={24} />
-                      </button>
-                  </div>
+                    ))}
+                    <div ref={messagesEndRef} />
                 </div>
-            </div>
-          </>
+                <div className="p-3 bg-[#f0f2f5] flex gap-2">
+                    <input 
+                        className="flex-1 p-2 rounded border focus:outline-none" 
+                        placeholder="Type to reply..." 
+                        value={inputText}
+                        onChange={e => setInputText(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && handleSendMessage()}
+                    />
+                    <button onClick={handleSendMessage} className="text-[#008069]"><Send /></button>
+                </div>
+            </>
         ) : (
-          <div className="hidden md:flex flex-col items-center justify-center h-full bg-[#f0f2f5] border-b-[6px] border-[#25d366]">
-            <img src="https://i.ibb.co/0yVkM0Zr/jtv.png" alt="Logo" className="w-24 h-24 mb-6 opacity-80" />
-            <h1 className="text-[#41525d] text-3xl font-light mb-4">JohnTech Dashboard</h1>
-            <p className="text-[#8696a0] text-sm max-w-md text-center">
-              View incoming customer queries here in real-time.<br/>
-              Chats turn <strong>Red</strong> when the bot locks due to buying intent.
-            </p>
-          </div>
+            <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
+                <Bot size={48} className="mb-4 opacity-20" />
+                <p>Select a chat to view activity</p>
+            </div>
         )}
       </div>
     </div>
