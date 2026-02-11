@@ -1,4 +1,3 @@
-
 import 'dotenv/config';
 import express from 'express';
 import path from 'path';
@@ -33,6 +32,7 @@ let chatSessions = {};
 let leadsData = { categories: {}, lastUpdated: null };
 let knowledgeBase = []; 
 let retryQueue = [];
+let lastDailyRunDate = null; // To track daily execution
 
 let serverConfig = {
   accessToken: process.env.FB_ACCESS_TOKEN || '',
@@ -70,13 +70,11 @@ async function performSelfLearning() {
     const apiKey = getApiKey();
     if (!apiKey) return;
 
-    // Filter conversations from the last 24 hours that have Admin responses
     const yesterday = new Date();
     yesterday.setHours(yesterday.getHours() - 24);
 
     const relevantChats = Object.values(chatSessions).filter(c => {
         const lastMsgTime = new Date(c.lastMessageTime);
-        // Only scan chats that were active today AND have an admin reply
         const hasAdminReply = c.messages.some(m => m.sender === 'bot' && m.id && m.id.startsWith('admin_')); 
         return lastMsgTime > yesterday && hasAdminReply;
     });
@@ -91,7 +89,7 @@ async function performSelfLearning() {
     The admin's word is final. Your task is to extract NEW FACTS that aren't in your catalog.
     
     CONVERSATIONS:
-    ${relevantChats.map(c => c.messages.slice(-20).map(m => `[${m.sender === 'user' ? 'CLIENT' : (m.id.startsWith('admin_') ? 'ADMIN' : 'BOT')}]: ${m.text}`).join('\n')).join('\n---Next Chat---\n')}
+    ${relevantChats.map(c => c.messages.slice(-20).map(m => `[${m.sender === 'user' ? 'CLIENT' : (m.id && m.id.startsWith('admin_') ? 'ADMIN' : 'BOT')}]: ${m.text}`).join('\n')).join('\n---Next Chat---\n')}
     
     TASK:
     Identify specific new info the Admin mentioned: custom prices, new shop rules, fabrication times, or technical answers.
@@ -187,15 +185,14 @@ const getSystemInstruction = (products) => {
   return `You are "John", a human sales expert at JohnTech Vendors Ltd. 
   
   *** HUMAN BEHAVIOR RULES ***
-  1. **BREVITY:** Keep responses under 25 words. Don't be robotic.
-  2. **STEP-BY-STEP:** Don't dump info. Ask one question at a time.
-     - Bad: "We have 100L at 50k and 200L at 80k. Delivery is free."
-     - Good: "Yes we have Milk ATMs. What size are you looking for? (e.g 100L or 200L)"
-  3. **WATER LOGIC:** If they ask for water machines, ask for their water source (Borehole vs Kanjo) first.
-  4. **CLOSING:** Use 'escalateToAdmin' ONLY when they are ready to pay or visit the shop.
+  1. **BREVITY:** Responses MUST be under 20 words. No info-dumping.
+  2. **ONE STEP AT A TIME:** Only ask one question per reply. Mimic a real chat.
+  3. **CONSULTATIVE:** If they ask for "Water Machine", ask for their water source (Borehole vs Kanjo) BEFORE giving price.
+  4. **MIRRORING:** Reply in the same language style as the user (Sheng, Swahili, or English).
+  5. **ESCALATION:** When a user is ready to pay, call 'escalateToAdmin'. Say something like: "Let me check the exact stock on that for you real quick, just a second..."
   
-  *** THINGS YOU LEARNED RECENTLY ***
-  ${learnedKnowledge || "Standard procedures apply."}
+  *** THINGS YOU LEARNED FROM ADMIN RECENTLY ***
+  ${learnedKnowledge || "Follow standard catalog procedures."}
 
   *** CATALOG ***
   ${productCatalogStr}`;
@@ -211,9 +208,8 @@ app.post('/api/send-message', async (req, res) => {
     const { to, text } = req.body;
     try {
         const sessionId = to;
-        const msgId = `admin_${Date.now()}`; // Prefix for learning engine
+        const msgId = `admin_${Date.now()}`;
         
-        // Update local chat
         if (chatSessions[sessionId]) {
             chatSessions[sessionId].messages.push({ 
                 id: msgId, 
@@ -251,7 +247,7 @@ app.post('/webhook', async (req, res) => {
     const apiKey = getApiKey();
 
     if (!chatSessions[sender]) chatSessions[sender] = { id: sender, contactName: msg.contacts?.[0]?.profile?.name || sender, messages: [], lastMessage: '', lastMessageTime: new Date(), botActive: true };
-    const incoming = { id: msg.id, sender: 'user', timestamp: new Date(), type: 'text', text: msg.text?.body || 'File' };
+    const incoming = { id: msg.id, sender: 'user', timestamp: new Date(), type: 'text', text: msg.text?.body || 'Attachment' };
     chatSessions[sender].messages.push(incoming);
     chatSessions[sender].lastMessage = incoming.text;
     chatSessions[sender].lastMessageTime = new Date();
@@ -294,8 +290,7 @@ app.post('/webhook', async (req, res) => {
             }
             if (fc.name === 'escalateToAdmin') {
                 isLocking = true;
-                // Filler response to avoid bot looking dead
-                textRes = "Let me check the exact stock and best discount for you on that real quick, just a second...";
+                textRes = "Let me check the exact stock and details on that for you real quick, one moment...";
             }
         }
     }
@@ -327,11 +322,14 @@ app.post('/webhook', async (req, res) => {
 });
 
 // --- MIDNIGHT SCHEDULER ---
-// Runs at 00:00 every day
 setInterval(async () => {
     const now = new Date();
-    if (now.getHours() === 0 && now.getMinutes() === 0) {
-        console.log("🕛 Midnight Learning & Analysis Triggered...");
+    const dateStr = now.toISOString().split('T')[0];
+    
+    // Check if it's 00:00 and we haven't run today
+    if (now.getHours() === 0 && lastDailyRunDate !== dateStr) {
+        lastDailyRunDate = dateStr;
+        console.log(`🕛 Midnight Maintenance Started for ${dateStr}...`);
         await performSelfLearning();
         await performLeadAnalysis(false);
     }
