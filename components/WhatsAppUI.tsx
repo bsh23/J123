@@ -2,9 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Product, Message, ChatSession, LeadsData, AnalyzedLead } from '../types';
 import { 
-  MoreVertical, Search, Paperclip, Smile, 
-  Send, CheckCheck, ArrowLeft, Lock, Bot, X, Trash2,
-  Sparkles, MessageSquare, PhoneCall, RefreshCw, ChevronRight, AlertCircle
+  MoreVertical, Send, ArrowLeft, Lock, Bot, RefreshCw, ChevronRight, AlertCircle, MessageSquare, Phone
 } from 'lucide-react';
 
 interface WhatsAppUIProps {
@@ -32,7 +30,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
       if (res.ok) setChatSessions(await res.json());
     };
     fetchChats();
-    const int = setInterval(fetchChats, 4000);
+    const int = setInterval(fetchChats, 5000);
     return () => clearInterval(int);
   }, []);
 
@@ -64,6 +62,14 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
     setIsSending(false);
   };
 
+  const toggleBot = async (id: string, active: boolean) => {
+    await fetch(`/api/chat/${id}/toggle-bot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active })
+    });
+  };
+
   const selectedChat = chatSessions.find(c => c.id === selectedChatId);
 
   return (
@@ -73,7 +79,7 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
       <div className={`w-full md:w-[30%] bg-white border-r flex flex-col ${selectedChatId ? 'hidden md:flex' : 'flex'}`}>
         <div className="bg-[#f0f2f5] p-4 flex flex-col gap-3 border-b">
             <div className="flex justify-between items-center">
-                <img src="https://i.ibb.co/0yVkM0Zr/jtv.png" className="w-10 h-10 rounded-full" />
+                <img src="https://i.ibb.co/0yVkM0Zr/jtv.png" className="w-10 h-10 rounded-full" alt="logo" />
                 <div className="flex gap-4 text-gray-500">
                     <button onClick={openCatalog} title="Inventory"><MoreVertical size={22} /></button>
                 </div>
@@ -81,15 +87,15 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
             <div className="flex gap-2">
                 <button 
                     onClick={() => setSidebarView('chats')}
-                    className={`flex-1 py-2 rounded text-sm font-bold ${sidebarView === 'chats' ? 'bg-white text-[#008069] shadow-sm' : 'text-gray-500'}`}
+                    className={`flex-1 py-2 rounded text-sm font-bold flex items-center justify-center gap-2 ${sidebarView === 'chats' ? 'bg-white text-[#008069] shadow-sm' : 'text-gray-500'}`}
                 >
-                    Chats
+                    <MessageSquare size={16} /> Chats
                 </button>
                 <button 
                     onClick={() => setSidebarView('leads')}
-                    className={`flex-1 py-2 rounded text-sm font-bold ${sidebarView === 'leads' ? 'bg-white text-[#008069] shadow-sm' : 'text-gray-500'}`}
+                    className={`flex-1 py-2 rounded text-sm font-bold flex items-center justify-center gap-2 ${sidebarView === 'leads' ? 'bg-white text-[#008069] shadow-sm' : 'text-gray-500'}`}
                 >
-                    Leads
+                    <RefreshCw size={16} className={isAnalyzing ? 'animate-spin' : ''} /> AI Leads
                 </button>
             </div>
         </div>
@@ -107,7 +113,10 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                             {!chat.botActive && <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-600 rounded-full flex items-center justify-center text-[8px] text-white"><Lock size={8} /></div>}
                         </div>
                         <div className="flex-1 min-w-0">
-                            <h4 className={`text-sm font-semibold truncate ${!chat.botActive ? 'text-red-700' : 'text-gray-800'}`}>{chat.contactName}</h4>
+                            <div className="flex justify-between items-center">
+                                <h4 className={`text-sm font-semibold truncate ${!chat.botActive ? 'text-red-700' : 'text-gray-800'}`}>{chat.contactName}</h4>
+                                {chat.unreadCount > 0 && <span className="bg-[#25D366] text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">{chat.unreadCount}</span>}
+                            </div>
                             <p className="text-xs text-gray-500 truncate">{chat.lastMessage}</p>
                         </div>
                     </div>
@@ -115,11 +124,10 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
             ) : (
                 <div className="bg-white">
                     <div className="p-3 border-b flex justify-between items-center bg-gray-50">
-                        <span className="text-xs font-bold text-gray-500">Categorized Opportunities</span>
-                        <button onClick={() => fetchLeads(true)} className="text-[#008069]"><RefreshCw size={14} className={isAnalyzing ? 'animate-spin' : ''} /></button>
+                        <span className="text-xs font-bold text-gray-500">Categorized Intent</span>
+                        <button onClick={() => fetchLeads(true)} className="text-[#008069] text-xs font-bold hover:underline">Scan Now</button>
                     </div>
                     {leadsData && Object.entries(leadsData.categories).map(([cat, leads]) => {
-                        // Fix: Cast 'leads' to AnalyzedLead[] to avoid TS unknown errors
                         const typedLeads = leads as AnalyzedLead[];
                         return (
                             <div key={cat} className="border-b">
@@ -134,59 +142,104 @@ const WhatsAppUI: React.FC<WhatsAppUIProps> = ({ products, openCatalog, openSett
                                     <div 
                                         key={l.phone} 
                                         onClick={() => setSelectedChatId(l.phone)}
-                                        className={`p-3 pl-6 border-t cursor-pointer hover:bg-green-50 flex flex-col gap-1 ${l.isSerious ? 'bg-yellow-50 border-l-4 border-l-yellow-400' : ''}`}
+                                        className={`p-3 pl-6 border-t cursor-pointer hover:bg-green-50 flex flex-col gap-1 ${l.isSerious ? 'bg-yellow-50 border-l-4 border-l-red-500' : ''}`}
                                     >
                                         <div className="flex justify-between items-center">
-                                            <span className="text-xs font-bold text-gray-800">{l.name}</span>
-                                            {l.isSerious && <span className="text-[9px] bg-red-600 text-white px-1.5 rounded font-black flex items-center gap-1"><AlertCircle size={8} /> SERIOUS</span>}
+                                            <span className="text-xs font-bold text-gray-800">{l.name || l.phone}</span>
+                                            {l.isSerious && <span className="text-[9px] bg-red-600 text-white px-1.5 rounded font-black flex items-center gap-1 shadow-sm"><AlertCircle size={8} /> SERIOUS</span>}
                                         </div>
-                                        <p className="text-[11px] text-gray-600 italic">"{l.reason}"</p>
+                                        <p className="text-[11px] text-gray-600 italic line-clamp-2">"{l.reason}"</p>
                                     </div>
                                 ))}
                             </div>
                         );
                     })}
+                    {(!leadsData || Object.keys(leadsData.categories).length === 0) && (
+                        <div className="p-10 text-center text-gray-400 text-sm">No analysis found. Click "Scan Now" to begin.</div>
+                    )}
                 </div>
             )}
         </div>
       </div>
 
       {/* Chat Area */}
-      <div className={`flex-1 flex flex-col bg-[#efeae2] ${selectedChatId ? 'flex' : 'hidden md:flex'}`}>
+      <div className={`flex-1 flex flex-col bg-[#efeae2] whatsapp-bg ${selectedChatId ? 'flex' : 'hidden md:flex'}`}>
         {selectedChat ? (
             <>
-                <div className={`h-16 px-4 flex items-center justify-between border-b ${!selectedChat.botActive ? 'bg-red-100' : 'bg-[#f0f2f5]'}`}>
+                <div className={`h-16 px-4 flex items-center justify-between border-b ${!selectedChat.botActive ? 'bg-red-100' : 'bg-[#f0f2f5]'} z-10`}>
                     <div className="flex items-center gap-3">
                         <button onClick={() => setSelectedChatId(null)} className="md:hidden"><ArrowLeft size={24} /></button>
-                        <h3 className="font-bold text-gray-800">{selectedChat.contactName}</h3>
+                        <div className="w-10 h-10 bg-gray-300 rounded-full flex items-center justify-center font-bold text-gray-600">
+                            {selectedChat.contactName[0]}
+                        </div>
+                        <div>
+                            <h3 className="font-bold text-gray-800 leading-tight">{selectedChat.contactName}</h3>
+                            <p className="text-[10px] text-gray-500">WhatsApp Business</p>
+                        </div>
                     </div>
-                    {!selectedChat.botActive && <span className="text-xs font-bold text-red-600 animate-pulse">LOCKED FOR ADMIN</span>}
+                    <div className="flex gap-4 items-center">
+                        {!selectedChat.botActive ? (
+                            <button 
+                                onClick={() => toggleBot(selectedChat.id, true)}
+                                className="text-xs bg-red-600 text-white px-3 py-1 rounded-full font-bold flex items-center gap-2"
+                            >
+                                <Lock size={12} /> RE-ACTIVATE BOT
+                            </button>
+                        ) : (
+                            <button 
+                                onClick={() => toggleBot(selectedChat.id, false)}
+                                className="text-xs bg-gray-200 text-gray-600 px-3 py-1 rounded-full font-bold hover:bg-gray-300"
+                            >
+                                LOCK BOT
+                            </button>
+                        )}
+                        <a href={`tel:${selectedChat.id}`} className="text-gray-500"><Phone size={20} /></a>
+                        <MoreVertical size={20} className="text-gray-500" />
+                    </div>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
+                
+                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2 relative">
                     {selectedChat.messages.map((m, i) => (
                         <div key={i} className={`flex ${m.sender === 'user' ? 'justify-start' : 'justify-end'}`}>
-                            <div className={`max-w-[80%] p-2 rounded shadow-sm text-sm ${m.sender === 'user' ? 'bg-white' : 'bg-[#d9fdd3]'}`}>
+                            <div className={`max-w-[85%] p-2 px-3 rounded shadow-sm text-sm relative group ${m.sender === 'user' ? 'bg-white rounded-tl-none' : 'bg-[#d9fdd3] rounded-tr-none'}`}>
                                 {m.text}
+                                <div className="text-[9px] text-gray-400 mt-1 text-right">
+                                    {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </div>
                             </div>
                         </div>
                     ))}
                     <div ref={messagesEndRef} />
                 </div>
-                <div className="p-3 bg-[#f0f2f5] flex gap-2">
+
+                <div className="p-3 bg-[#f0f2f5] flex gap-2 items-center z-10">
                     <input 
-                        className="flex-1 p-2 rounded border focus:outline-none" 
-                        placeholder="Type to reply..." 
+                        className="flex-1 p-2.5 px-4 rounded-full border-none focus:outline-none text-sm shadow-sm" 
+                        placeholder="Type a message..." 
                         value={inputText}
                         onChange={e => setInputText(e.target.value)}
-                        onKeyDown={e => e.key === 'Enter' && handleSendMessage()}
+                        onKeyDown={e => e.key === 'Enter' && !isSending && handleSendMessage()}
                     />
-                    <button onClick={handleSendMessage} className="text-[#008069]"><Send /></button>
+                    <button 
+                        onClick={handleSendMessage} 
+                        disabled={isSending || !inputText.trim()}
+                        className={`w-11 h-11 rounded-full flex items-center justify-center text-white shadow-md ${inputText.trim() ? 'bg-[#008069]' : 'bg-gray-400'}`}
+                    >
+                        <Send size={20} />
+                    </button>
                 </div>
             </>
         ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
-                <Bot size={48} className="mb-4 opacity-20" />
-                <p>Select a chat to view activity</p>
+                <div className="w-24 h-24 bg-gray-200 rounded-full flex items-center justify-center mb-6 opacity-30">
+                    <Bot size={64} />
+                </div>
+                <h2 className="text-xl font-medium text-gray-600">JohnTech Assistant</h2>
+                <p className="text-sm mt-2 opacity-60">Select a conversation to start selling.</p>
+                <div className="mt-8 flex gap-3">
+                    <button onClick={openCatalog} className="bg-[#008069] text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm">View Inventory</button>
+                    <button onClick={() => setSidebarView('leads')} className="bg-white text-[#008069] px-4 py-2 rounded-lg text-sm font-bold shadow-sm">Check Leads</button>
+                </div>
             </div>
         )}
       </div>

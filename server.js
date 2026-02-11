@@ -31,7 +31,7 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 let productInventory = [];
 let chatSessions = {}; 
 let leadsData = { categories: {}, lastUpdated: null };
-let knowledgeBase = []; // Array of learned strings
+let knowledgeBase = []; 
 let retryQueue = [];
 
 let serverConfig = {
@@ -66,34 +66,38 @@ const MODEL_NAME = 'gemini-3-flash-preview';
 
 // --- SELF-LEARNING ENGINE ---
 async function performSelfLearning() {
-    console.log("🧠 Learning Engine: Scanning Admin responses...");
+    console.log("🧠 Learning Engine: Scanning Admin responses from today...");
     const apiKey = getApiKey();
     if (!apiKey) return;
 
     // Filter conversations from the last 24 hours that have Admin responses
     const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(yesterday.getHours() - 24);
 
     const relevantChats = Object.values(chatSessions).filter(c => {
         const lastMsgTime = new Date(c.lastMessageTime);
-        const hasAdminReply = c.messages.some(m => m.sender === 'bot' && m.id.startsWith('admin_')); 
+        // Only scan chats that were active today AND have an admin reply
+        const hasAdminReply = c.messages.some(m => m.sender === 'bot' && m.id && m.id.startsWith('admin_')); 
         return lastMsgTime > yesterday && hasAdminReply;
     });
 
-    if (relevantChats.length === 0) return;
+    if (relevantChats.length === 0) {
+        console.log("🧠 Learning Engine: No admin interactions to learn from today.");
+        return;
+    }
 
     const learningPrompt = `
-    You are the Brain of JohnTech Vendors. Look at these conversations between a real HUMAN ADMIN and clients.
-    The admin is the expert. Your job is to extract NEW KNOWLEDGE that isn't in your standard manual.
+    You are the Brain of JohnTech Vendors. Look at these conversations where a HUMAN ADMIN (expert) took over from the bot.
+    The admin's word is final. Your task is to extract NEW FACTS that aren't in your catalog.
     
     CONVERSATIONS:
-    ${relevantChats.map(c => c.messages.slice(-20).map(m => `[${m.sender}]: ${m.text}`).join('\n')).join('\n---Chat---\n')}
+    ${relevantChats.map(c => c.messages.slice(-20).map(m => `[${m.sender === 'user' ? 'CLIENT' : (m.id.startsWith('admin_') ? 'ADMIN' : 'BOT')}]: ${m.text}`).join('\n')).join('\n---Next Chat---\n')}
     
     TASK:
-    Identify new facts, special prices, unique delivery rules, or fabrication details the Admin mentioned.
-    Return strictly a JSON array of strings, each being a short fact. 
-    Example: ["We now offer a 10% discount for cash payments on Milk ATMs over 200L.", "The new showroom is open on Sundays."]
-    If nothing new found, return [].
+    Identify specific new info the Admin mentioned: custom prices, new shop rules, fabrication times, or technical answers.
+    Return strictly a JSON array of strings (short facts).
+    Example: ["100L Milk ATMs now come with a digital meter.", "Delivery to Nakuru is now KSh 2000."]
+    Return [] if nothing new.
     `;
 
     try {
@@ -102,7 +106,7 @@ async function performSelfLearning() {
         const newFacts = JSON.parse(res.text);
         
         if (Array.isArray(newFacts) && newFacts.length > 0) {
-            knowledgeBase = [...new Set([...knowledgeBase, ...newFacts])].slice(-100); // Keep last 100 facts
+            knowledgeBase = [...new Set([...knowledgeBase, ...newFacts])].slice(-100); 
             await saveKB();
             console.log(`✅ Learned ${newFacts.length} new facts.`);
         }
@@ -129,21 +133,21 @@ async function performLeadAnalysis(force = false) {
     }
 
     const analysisPrompt = `
-      Analyze these WhatsApp chats for JohnTech Vendors.
+      Analyze these JohnTech Vendors WhatsApp chats.
       
       CHATS:
       ${chatsToAnalyze.slice(0, 20).map(c => `Phone: ${c.id}\nHistory: ${c.messages.slice(-10).map(m=>m.text).join(' | ')}`).join('\n---\n')}
 
       TASK:
-      1. Categorize each user by the machine they want (e.g., "Milk ATM", "RO", "Oil ATM"). If unknown, use "General".
-      2. Flag as "isSerious: true" if they asked for a visit, till number, or specific delivery logistics.
+      1. Categorize each user by product: "Milk ATM", "Oil ATM", "Water Vending", "RO", "Pasteurizer", or "General".
+      2. Set "isSerious: true" ONLY if they asked for payment details, a site visit, or explicit delivery terms.
 
       OUTPUT FORMAT:
       Return strictly a JSON object:
       {
         "categories": {
            "Milk ATM": [{ "phone": "...", "name": "...", "reason": "...", "isSerious": true }],
-           "RO": [...]
+           "General": [...]
         }
       }
     `;
@@ -153,7 +157,6 @@ async function performLeadAnalysis(force = false) {
         const res = await ai.models.generateContent({ model: MODEL_NAME, contents: analysisPrompt, config: { responseMimeType: "application/json" } });
         const result = JSON.parse(res.text);
 
-        // Merge logic
         const newCats = result.categories || {};
         const currentCats = leadsData.categories || {};
 
@@ -167,7 +170,6 @@ async function performLeadAnalysis(force = false) {
         }
 
         leadsData = { categories: currentCats, lastUpdated: new Date().toISOString() };
-        
         const nowStr = new Date().toISOString();
         chatsToAnalyze.forEach(c => { if(chatSessions[c.id]) chatSessions[c.id].lastAnalyzedTime = nowStr; });
 
@@ -179,21 +181,21 @@ async function performLeadAnalysis(force = false) {
 
 // --- SYSTEM PROMPT ---
 const getSystemInstruction = (products) => {
-  const productCatalogStr = products.map(p => `[${p.category}] ${p.name}: Max Price KSh ${p.priceRange.max}`).join('\n');
+  const productCatalogStr = products.map(p => `[${p.category}] ${p.name}: KSh ${p.priceRange.min}-${p.priceRange.max}`).join('\n');
   const learnedKnowledge = knowledgeBase.map(f => `- ${f}`).join('\n');
 
-  return `You are "John", a human sales agent for JohnTech Vendors. 
+  return `You are "John", a human sales expert at JohnTech Vendors Ltd. 
   
-  *** HUMAN CONVERSATION RULES (STRICT) ***
-  1. **BREVITY:** Keep every message under 25 words. 
-  2. **STEP-BY-STEP:** Don't answer everything at once. Ask one follow-up question.
-     - Example: If asked for Milk ATM, say "Yes we have them. What size are you thinking of? (e.g 100L, 200L)" 
-     - WAIT for the answer before giving price.
-  3. **MIRRORING:** If user says "Sasa", say "Sasa, nikuform aje?" 
-  4. **ESCALATION:** If a user is 100% ready to buy or asks for a "Till Number", use 'escalateToAdmin'.
+  *** HUMAN BEHAVIOR RULES ***
+  1. **BREVITY:** Keep responses under 25 words. Don't be robotic.
+  2. **STEP-BY-STEP:** Don't dump info. Ask one question at a time.
+     - Bad: "We have 100L at 50k and 200L at 80k. Delivery is free."
+     - Good: "Yes we have Milk ATMs. What size are you looking for? (e.g 100L or 200L)"
+  3. **WATER LOGIC:** If they ask for water machines, ask for their water source (Borehole vs Kanjo) first.
+  4. **CLOSING:** Use 'escalateToAdmin' ONLY when they are ready to pay or visit the shop.
   
-  *** LEARNED KNOWLEDGE (Admin Updates) ***
-  ${learnedKnowledge || "None yet."}
+  *** THINGS YOU LEARNED RECENTLY ***
+  ${learnedKnowledge || "Standard procedures apply."}
 
   *** CATALOG ***
   ${productCatalogStr}`;
@@ -205,7 +207,38 @@ app.post('/api/analyze-leads', async (req, res) => {
   res.json(result || leadsData);
 });
 
-// Other routes (Admin Send, Settings, CRUD) remain the same logic...
+app.post('/api/send-message', async (req, res) => {
+    const { to, text } = req.body;
+    try {
+        const sessionId = to;
+        const msgId = `admin_${Date.now()}`; // Prefix for learning engine
+        
+        // Update local chat
+        if (chatSessions[sessionId]) {
+            chatSessions[sessionId].messages.push({ 
+                id: msgId, 
+                sender: 'bot', 
+                text, 
+                timestamp: new Date() 
+            });
+            chatSessions[sessionId].lastMessage = text;
+            chatSessions[sessionId].lastMessageTime = new Date();
+            chatSessions[sessionId].unreadCount = 0;
+            await saveChats();
+        }
+
+        await axios.post(`https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`, 
+            { messaging_product: 'whatsapp', to, type: 'text', text: { body: text } }, 
+            { headers: { Authorization: `Bearer ${serverConfig.accessToken}` } }
+        );
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: 'Failed' }); }
+});
+
+app.get('/api/chats', (req, res) => {
+    const chats = Object.values(chatSessions).sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
+    res.json(chats);
+});
 
 // --- WEBHOOK LOGIC ---
 app.post('/webhook', async (req, res) => {
@@ -217,9 +250,8 @@ app.post('/webhook', async (req, res) => {
     const sender = msg.from;
     const apiKey = getApiKey();
 
-    // 1. Log & Store User Message
     if (!chatSessions[sender]) chatSessions[sender] = { id: sender, contactName: msg.contacts?.[0]?.profile?.name || sender, messages: [], lastMessage: '', lastMessageTime: new Date(), botActive: true };
-    const incoming = { id: msg.id, sender: 'user', timestamp: new Date(), type: 'text', text: msg.text?.body || 'Attachment' };
+    const incoming = { id: msg.id, sender: 'user', timestamp: new Date(), type: 'text', text: msg.text?.body || 'File' };
     chatSessions[sender].messages.push(incoming);
     chatSessions[sender].lastMessage = incoming.text;
     chatSessions[sender].lastMessageTime = new Date();
@@ -227,9 +259,8 @@ app.post('/webhook', async (req, res) => {
 
     if (!chatSessions[sender].botActive || !apiKey) return;
 
-    // 2. Prepare AI
     const ai = new GoogleGenAI({ apiKey });
-    const history = chatSessions[sender].messages.slice(-20).map(m => ({
+    const history = chatSessions[sender].messages.slice(-15).map(m => ({
         role: m.sender === 'user' ? 'user' : 'model',
         parts: [{ text: m.text }]
     }));
@@ -247,13 +278,11 @@ app.post('/webhook', async (req, res) => {
         history: history.slice(0, -1)
     });
 
-    // 3. Generate Response
     const result = await chat.sendMessage({ message: { parts: [{ text: incoming.text }] } });
     const content = result.candidates[0].content;
-    const textRes = content.parts.find(p => p.text)?.text;
+    let textRes = content.parts.find(p => p.text)?.text || "";
     const fCalls = content.parts.filter(p => p.functionCall);
 
-    let finalMsg = textRes;
     let images = [];
     let isLocking = false;
 
@@ -265,18 +294,28 @@ app.post('/webhook', async (req, res) => {
             }
             if (fc.name === 'escalateToAdmin') {
                 isLocking = true;
-                // OVERRIDE textRes for human transition
-                finalMsg = "Let me check the exact stock and best discount for you on that real quick, just a second...";
+                // Filler response to avoid bot looking dead
+                textRes = "Let me check the exact stock and best discount for you on that real quick, just a second...";
             }
         }
     }
 
-    // 4. Send Responses
     if (images.length > 0) {
-        for (const img of images) await sendWhatsApp(sender, { type: 'image', image: { link: `${DOMAIN}/api/render-image/...` } });
+        for (const img of images) {
+            await axios.post(`https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`, 
+                { messaging_product: 'whatsapp', to: sender, type: 'image', image: { link: img } }, 
+                { headers: { Authorization: `Bearer ${serverConfig.accessToken}` } }
+            );
+        }
     }
-    if (finalMsg) {
-        await sendWhatsApp(sender, { type: 'text', text: { body: finalMsg.replace(/\*/g, '') } });
+
+    if (textRes) {
+        await axios.post(`https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`, 
+            { messaging_product: 'whatsapp', to: sender, type: 'text', text: { body: textRes.replace(/\*/g, '') } }, 
+            { headers: { Authorization: `Bearer ${serverConfig.accessToken}` } }
+        );
+        chatSessions[sender].messages.push({ sender: 'bot', text: textRes, timestamp: new Date() });
+        await saveChats();
     }
 
     if (isLocking) {
@@ -284,37 +323,20 @@ app.post('/webhook', async (req, res) => {
         chatSessions[sender].isEscalated = true;
         await saveChats();
     }
-
   } catch (err) { console.error("Webhook Error:", err); }
 });
 
 // --- MIDNIGHT SCHEDULER ---
+// Runs at 00:00 every day
 setInterval(async () => {
     const now = new Date();
-    if (now.getHours() === 0) {
-        console.log("🕛 Midnight Maintenance Started...");
+    if (now.getHours() === 0 && now.getMinutes() === 0) {
+        console.log("🕛 Midnight Learning & Analysis Triggered...");
         await performSelfLearning();
         await performLeadAnalysis(false);
     }
-}, 3600000);
+}, 60000); 
 
-// Initialize
 loadAll().then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`🚀 JohnTech Bot Online on ${PORT}`));
 });
-
-// (Simplified helper for example)
-async function sendWhatsApp(to, payload) {
-    try {
-        await axios.post(`https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`, 
-            { messaging_product: 'whatsapp', to, ...payload }, 
-            { headers: { Authorization: `Bearer ${serverConfig.accessToken}` } }
-        );
-        // Also update local state
-        const sess = chatSessions[to];
-        if (sess) {
-            sess.messages.push({ sender: 'bot', text: payload.text?.body || 'Image', timestamp: new Date() });
-            sess.lastMessageTime = new Date();
-        }
-    } catch (e) { console.error("WhatsApp Send Error:", e.response?.data); }
-}
