@@ -1,4 +1,3 @@
-
 import 'dotenv/config';
 import express from 'express';
 import path from 'path';
@@ -65,23 +64,9 @@ const MODEL_NAME = 'gemini-3-flash-preview';
 
 // --- SELF-LEARNING ENGINE ---
 async function performSelfLearning() {
-    console.log("🧠 Learning Engine: Scanning Admin responses...");
     const apiKey = getApiKey();
     if (!apiKey) return;
-
-    const yesterday = new Date();
-    yesterday.setHours(yesterday.getHours() - 24);
-
-    const relevantChats = Object.values(chatSessions).filter(c => {
-        const lastMsgTime = new Date(c.lastMessageTime);
-        const hasAdminReply = c.messages.some(m => m.sender === 'bot' && m.id && m.id.startsWith('admin_')); 
-        return lastMsgTime > yesterday && hasAdminReply;
-    });
-
-    if (relevantChats.length === 0) return;
-
-    const learningPrompt = `Extract new facts from these admin responses for JohnTech Vendors. Return a JSON array of short strings. [${relevantChats.map(c => c.messages.slice(-10).map(m => m.text).join(' ')).join(' | ')}]`;
-
+    const learningPrompt = `Extract facts from these admin responses for JohnTech Vendors. JSON array of strings.`;
     try {
         const ai = new GoogleGenAI({ apiKey });
         const res = await ai.models.generateContent({ model: MODEL_NAME, contents: learningPrompt, config: { responseMimeType: "application/json" } });
@@ -90,14 +75,14 @@ async function performSelfLearning() {
             knowledgeBase = [...new Set([...knowledgeBase, ...newFacts])].slice(-100); 
             await saveKB();
         }
-    } catch (err) { console.error("Learning Error:", err.message); }
+    } catch (err) {}
 }
 
 // --- LEAD ANALYSIS ---
 async function performLeadAnalysis(force = false) {
     const apiKey = getApiKey();
     if (!apiKey) return null;
-    const analysisPrompt = `Categorize these leads for JohnTech Vendors. Return JSON: { "categories": { "Category": [{"phone":"", "name":"", "reason":"", "isSerious":true}] } } Chats: ${JSON.stringify(Object.values(chatSessions).slice(0, 10))}`;
+    const analysisPrompt = `Categorize leads for JohnTech Vendors. JSON format.`;
     try {
         const ai = new GoogleGenAI({ apiKey });
         const res = await ai.models.generateContent({ model: MODEL_NAME, contents: analysisPrompt, config: { responseMimeType: "application/json" } });
@@ -110,8 +95,7 @@ async function performLeadAnalysis(force = false) {
 
 const getSystemInstruction = (products) => {
   const productCatalogStr = products.map(p => `[${p.category}] ${p.name}: KSh ${p.priceRange.min}-${p.priceRange.max}`).join('\n');
-  const learnedKnowledge = knowledgeBase.map(f => `- ${f}`).join('\n');
-  return `You are "John", a human sales expert at JohnTech Vendors Ltd. Keep it brief (<20 words). One question at a time. \nCatalog:\n${productCatalogStr}\nKnowledge:\n${learnedKnowledge}`;
+  return `You are "John", sales expert at JohnTech Vendors Ltd. Brief responses. \nCatalog:\n${productCatalogStr}`;
 };
 
 // --- API ROUTES ---
@@ -139,15 +123,37 @@ app.get('/api/chats', (req, res) => res.json(Object.values(chatSessions).sort((a
 app.post('/api/send-message', async (req, res) => {
     const { to, text } = req.body;
     try {
-        if (chatSessions[to]) {
-            chatSessions[to].messages.push({ id: `admin_${Date.now()}`, sender: 'bot', text, timestamp: new Date() });
-            chatSessions[to].lastMessage = text;
-            chatSessions[to].lastMessageTime = new Date();
-            await saveChats();
+        if (!chatSessions[to]) {
+            chatSessions[to] = { id: to, contactName: to, messages: [], lastMessage: '', lastMessageTime: new Date(), botActive: true };
         }
+        const msgId = `admin_${Date.now()}`;
+        chatSessions[to].messages.push({ id: msgId, sender: 'bot', text, timestamp: new Date() });
+        chatSessions[to].lastMessage = text;
+        chatSessions[to].lastMessageTime = new Date();
+        await saveChats();
         await axios.post(`https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`, { messaging_product: 'whatsapp', to, type: 'text', text: { body: text } }, { headers: { Authorization: `Bearer ${serverConfig.accessToken}` } });
         res.json({ success: true });
     } catch (err) { res.status(500).json({ error: 'Failed' }); }
+});
+
+// DELETE MESSAGE ENDPOINT
+app.delete('/api/chat/:chatId/message/:messageId', async (req, res) => {
+    const { chatId, messageId } = req.params;
+    if (chatSessions[chatId]) {
+        chatSessions[chatId].messages = chatSessions[chatId].messages.filter(m => m.id !== messageId);
+        // Update last message if needed
+        if (chatSessions[chatId].messages.length > 0) {
+            const last = chatSessions[chatId].messages[chatSessions[chatId].messages.length - 1];
+            chatSessions[chatId].lastMessage = last.text;
+            chatSessions[chatId].lastMessageTime = last.timestamp;
+        } else {
+            chatSessions[chatId].lastMessage = '';
+        }
+        await saveChats();
+        res.json({ success: true });
+    } else {
+        res.status(404).json({ error: 'Chat not found' });
+    }
 });
 
 app.post('/api/chat/:id/toggle-bot', async (req, res) => {
@@ -183,13 +189,19 @@ app.post('/webhook', async (req, res) => {
     const sender = msg.from;
     const apiKey = getApiKey();
 
-    if (!chatSessions[sender]) chatSessions[sender] = { id: sender, contactName: msg.contacts?.[0]?.profile?.name || sender, messages: [], lastMessage: '', lastMessageTime: new Date(), botActive: true };
+    if (!chatSessions[sender]) {
+        chatSessions[sender] = { id: sender, contactName: msg.contacts?.[0]?.profile?.name || sender, messages: [], lastMessage: '', lastMessageTime: new Date(), botActive: true };
+    }
+    
+    // Ensure botActive is strictly checked
+    const isBotActive = chatSessions[sender].botActive !== false;
+
     chatSessions[sender].messages.push({ id: msg.id, sender: 'user', timestamp: new Date(), text: msg.text?.body || 'Attachment' });
     chatSessions[sender].lastMessage = msg.text?.body || 'Attachment';
     chatSessions[sender].lastMessageTime = new Date();
     await saveChats();
 
-    if (!chatSessions[sender].botActive || !apiKey) return;
+    if (!isBotActive || !apiKey) return;
 
     const ai = new GoogleGenAI({ apiKey });
     const chat = ai.chats.create({
@@ -199,13 +211,14 @@ app.post('/webhook', async (req, res) => {
     const result = await chat.sendMessage({ message: msg.text?.body || "Hello" });
     const textRes = result.text;
 
+    const botMsgId = `bot_${Date.now()}`;
     await axios.post(`https://graph.facebook.com/v17.0/${serverConfig.phoneNumberId}/messages`, { messaging_product: 'whatsapp', to: sender, type: 'text', text: { body: textRes } }, { headers: { Authorization: `Bearer ${serverConfig.accessToken}` } });
-    chatSessions[sender].messages.push({ sender: 'bot', text: textRes, timestamp: new Date() });
+    chatSessions[sender].messages.push({ id: botMsgId, sender: 'bot', text: textRes, timestamp: new Date() });
     await saveChats();
   } catch (err) {}
 });
 
-// --- STATIC FILES (Crucial for fix) ---
+// --- STATIC FILES ---
 app.use(express.static(path.join(__dirname, 'dist')));
 
 app.get('*', (req, res) => {
